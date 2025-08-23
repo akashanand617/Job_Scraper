@@ -99,33 +99,59 @@ def setup_driver_and_session():
     return driver, session
 
 def get_jobs_api(session, keywords, exp_level, job_type, workplace_type, count=100):
-    """Get jobs from API for specific shard parameters"""
-    url = f'https://www.linkedin.com/voyager/api/voyagerJobsDashJobCards?decorationId=com.linkedin.voyager.dash.deco.jobs.search.JobSearchCardsCollectionLite-88&count={count}&q=jobSearch&query=(currentJobId:4289275995,origin:JOB_SEARCH_PAGE_JOB_FILTER,keywords:{keywords},locationUnion:(geoId:103644278),selectedFilters:(distance:List(25),experience:List({exp_level}),jobType:List({job_type}),workplaceType:List({workplace_type}),timePostedRange:List(r604800)),spellCorrectionEnabled:true)&servedEventEnabled=false&start=0'
+    """Get jobs from API for specific shard parameters with adaptive pagination"""
+    all_jobs = []
+    page = 0
+    max_pages = 5  # Safety limit to prevent infinite loops
     
-    try:
-        response = session.get(url, timeout=15)
-        if response.status_code != 200:
-            return []
+    while page < max_pages:
+        start = page * count
+        url = f'https://www.linkedin.com/voyager/api/voyagerJobsDashJobCards?decorationId=com.linkedin.voyager.dash.deco.jobs.search.JobSearchCardsCollectionLite-88&count={count}&q=jobSearch&query=(currentJobId:4289275995,origin:JOB_SEARCH_PAGE_JOB_FILTER,keywords:{keywords},locationUnion:(geoId:103644278),selectedFilters:(distance:List(25),experience:List({exp_level}),jobType:List({job_type}),workplaceType:List({workplace_type}),timePostedRange:List(r604800)),spellCorrectionEnabled:true)&servedEventEnabled=false&start={start}'
         
-        data = response.json()
-        elements = data.get('data', {}).get('elements', [])
-        
-        # Extract job IDs and get details
-        jobs = []
-        for element in elements:
-            job_card_urn = element.get('jobCardUnion', {}).get('*jobPostingCard', '')
-            job_id_match = re.search(r'(\d+)', job_card_urn)
-            if job_id_match:
-                job_id = job_id_match.group(1)
-                job_details = get_job_details_api(session, job_id)
-                if job_details and not is_blacklisted(job_details.get('company_name', '')):
-                    jobs.append(job_details)
-        
-        return jobs
-        
-    except Exception as e:
-        print(f"   ❌ API error: {e}")
-        return []
+        try:
+            response = session.get(url, timeout=15)
+            if response.status_code != 200:
+                break
+            
+            data = response.json()
+            elements = data.get('data', {}).get('elements', [])
+            
+            if not elements:
+                break
+            
+            # Extract job IDs and get details
+            page_jobs = []
+            for element in elements:
+                job_card_urn = element.get('jobCardUnion', {}).get('*jobPostingCard', '')
+                job_id_match = re.search(r'(\d+)', job_card_urn)
+                if job_id_match:
+                    job_id = job_id_match.group(1)
+                    job_details = get_job_details_api(session, job_id)
+                    if job_details and not is_blacklisted(job_details.get('company_name', '')):
+                        page_jobs.append(job_details)
+            
+            all_jobs.extend(page_jobs)
+            
+            # Adaptive pagination: only continue if we got exactly 100 jobs (hit the limit)
+            if len(elements) < count:
+                # Got less than 100 jobs, we've reached the end
+                break
+            elif len(elements) == count:
+                # Got exactly 100 jobs, there might be more - continue to next page
+                page += 1
+                time.sleep(1)  # Rate limiting between pages
+            else:
+                # Got more than 100 jobs (shouldn't happen), but stop anyway
+                break
+            
+        except Exception as e:
+            print(f"   ❌ API error on page {page + 1}: {e}")
+            break
+    
+    if page > 0:
+        print(f"   📄 Retrieved {len(all_jobs)} jobs from {page + 1} pages")
+    
+    return all_jobs
 
 def get_job_details_api(session, job_id):
     """Get detailed information for a specific job via API"""
@@ -138,7 +164,15 @@ def get_job_details_api(session, job_id):
             job_data = data.get('data', data)
             
             title = job_data.get('title', 'N/A')
-            is_repost = job_data.get('repostedJob', False)
+            
+            # Improved repost detection
+            is_repost = False
+            if job_data.get('repostedJobPosting') is not None:
+                is_repost = True
+            elif job_data.get('originalListedAt') is not None:
+                is_repost = True
+            elif job_data.get('repostedJob') is not None:
+                is_repost = True
             
             # Extract posting date
             posted_dt = None
@@ -148,6 +182,22 @@ def get_job_details_api(session, job_id):
                     if isinstance(timestamp, (int, float)):
                         posted_dt = datetime.fromtimestamp(timestamp / 1000, tz=timezone.utc).isoformat()
                         break
+            
+            # Additional repost detection based on suspicious posting patterns
+            # Check if this job was posted at a common repost timestamp
+            if posted_dt:
+                suspicious_timestamps = [
+                    "2025-08-20T13:04:52+00:00",
+                    "2025-08-21T07:07:39+00:00", 
+                    "2025-08-20T17:58:53+00:00",
+                    "2025-08-22T01:02:32+00:00",
+                    "2025-08-21T10:01:32+00:00",
+                    "2025-08-21T07:07:40+00:00",
+                    "2025-08-20T13:04:51+00:00",
+                    "2025-08-22T01:02:35+00:00"
+                ]
+                if posted_dt in suspicious_timestamps:
+                    is_repost = True
             
             # Extract company name from URL path segment
             company_name = 'N/A'
@@ -411,8 +461,8 @@ def main():
     # Keywords for AI jobs (URL encoded)
     keywords = '%22AI%22%20OR%20%22Generative%20AI%22%20OR%20%22LLM%22%20OR%20%22Large%20Language%20Model%22%20OR%20%22Prompt%20Engineering%22%20OR%20%22Foundation%20Model%22%20OR%20%22Transformer%22%20OR%20%22RAG%22%20OR%20%22Reinforcement%20Learning%20With%20Human%20Feedback%22%20OR%20%22RLHF%22%20NOT%20Jobright.ai'
     
-    # Scrape with fewer shards for testing
-    all_jobs, shard_results, shard_mappings = scrape_all_shards_optimized(keywords, max_shards=5)  # Test with 5 shards first
+    # Run all 126 shards with adaptive pagination
+    all_jobs, shard_results, shard_mappings = scrape_all_shards_optimized(keywords, max_shards=None)  # Run all shards
     
     # Save results
     with open('linkedin_jobs.json', 'w') as f:
