@@ -1,56 +1,34 @@
 #!/usr/bin/env python3
 """
-LinkedIn Job Scraper - Hybrid API + DOM Approach
-Combines left panel parsing with API calls for complete data.
+Final LinkedIn Job Scraper - Optimized with Smart DOM Fallback
+Uses API-first approach with intelligent DOM fallback and early empty page detection
 """
 
-import pickle
-import re
-import json
-import hashlib
-import random
-import time
-import os
-import requests
-from collections import defaultdict
-from fake_useragent import UserAgent
-from urllib.parse import quote, urljoin
-from datetime import datetime, timezone, timedelta
 import undetected_chromedriver as uc
+import pickle
+import time
+import json
+import re
+import random
+from datetime import datetime, timezone
+from collections import defaultdict
 from bs4 import BeautifulSoup
 from selenium.webdriver.common.by import By
-from selenium.webdriver import ActionChains
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from fake_useragent import UserAgent
-from dotenv import load_dotenv
-import argparse
+from selenium.common.exceptions import TimeoutException, NoSuchElementException
 
-# Load environment variables
-load_dotenv()
+# Search parameters
+EXP_CODES = ["1", "2", "3", "4", "5", "6"]  # Intern to Executive
+JT_CODES = ["I", "F", "C", "T", "P", "V", "O"]  # Internship to Other
+WT_CODES = ["2", "1", "3"]  # Remote, On-site, Hybrid
 
-# Base search parameters
-BASE = {
-    "keywords": '"AI" OR "Generative AI" OR "LLM" OR "Large Language Model" OR '
-                '"Prompt Engineering" OR "Foundation Model" OR "Transformer" OR '
-                '"RAG" OR "Reinforcement Learning With Human Feedback" OR "RLHF"',
-    "location": "United States",
-    "geoId": "103644278",
-    "f_TPR": "r604800",
-}
-
-# Facet codes
-EXP_CODES = ["1", "2", "3", "4", "5", "6"]
-JT_CODES = ["I", "F", "C", "T", "P", "V", "O"]
-WT_CODES = ["2", "1", "3"]
-
-# Labels
+# Labels for readability
 EXP_LABEL = {"1": "intern", "2": "entry", "3": "associate", "4": "mid-senior", "5": "director", "6": "executive"}
 JT_LABEL = {"I": "internship", "F": "full_time", "C": "contract", "T": "temporary", "P": "part_time", "V": "volunteer", "O": "other"}
 WT_LABEL = {"1": "on_site", "2": "remote", "3": "hybrid"}
 
-# Blacklist
-BLACKLIST_COMPANY_IDS = set()
+# Blacklist companies
 BLACKLIST_RE = re.compile(
     r"(jobright|jooble|talent\.com|ziprecruiter|lensa|adzuna|simplyhired|neuvoo|jora|"
     r"glassdoor|jobs2careers|myjobhelper|careerbuilder|monster|snagajob|"
@@ -58,654 +36,414 @@ BLACKLIST_RE = re.compile(
     re.I
 )
 
-# Global storage
-jobs = {}
-shards = {}
-jobs_for_shard = defaultdict(list)
-shards_for_job = defaultdict(list)
+def load_cookies():
+    """Load saved cookies"""
+    try:
+        with open('li_cookies.pkl', 'rb') as f:
+            return pickle.load(f)
+    except FileNotFoundError:
+        print("❌ No saved cookies found. Please run login.py first.")
+        return None
 
-# Session for API calls
-api_session = None
-
-
-def login_and_save_cookies(email, password, user_agent=None, cookie_path="li_cookies.pkl"):
-    """
-    Launches a Selenium browser, logs into LinkedIn with the provided credentials,
-    waits for the landing page to load, then saves cookies to disk.
-    """
-    opts = uc.ChromeOptions()
-    # Don't set custom User-Agent as it causes browser crashes
-    # if user_agent:
-    #     opts.add_argument(f"--user-agent={user_agent}")
-    driver = uc.Chrome(options=opts)
-    driver.get("https://www.linkedin.com/login")
+def setup_driver_and_session():
+    """Setup browser session and extract API credentials"""
+    print("🔧 Setting up browser session...")
     
-    # fill in credentials
-    driver.find_element(By.ID, "username").send_keys(email)
-    driver.find_element(By.ID, "password").send_keys(password)
-    driver.find_element(By.CSS_SELECTOR, "button[type=submit]").click()
+    # Setup browser with optimized options
+    options = uc.ChromeOptions()
+    options.add_argument('--no-sandbox')
+    options.add_argument('--disable-gpu')
+    options.add_argument('--disable-images')
+    options.add_argument('--disable-javascript')  # Disable JS for faster loading
+    options.add_argument('--disable-plugins')
+    options.add_argument('--disable-extensions')
+    options.add_argument('--disable-dev-shm-usage')
+    options.add_argument('--disable-browser-side-navigation')
+    options.add_argument('--disable-site-isolation-trials')
     
-    # wait and enter 2fa if needed
-    time.sleep(60)
-    driver.get("https://www.linkedin.com")
-    # dump cookies
-    with open(cookie_path, "wb") as f:
-        pickle.dump(driver.get_cookies(), f)
+    driver = uc.Chrome(options=options)
+    driver.get('https://www.linkedin.com/jobs/')
     
-    driver.quit()
-    print(f"✅ Logged in and saved cookies to {cookie_path}")
-
-
-def make_driver_with_cookies(cookie_path="li_cookies.pkl", user_agent=None, proxy=None):
-    """
-    Spins up a ChromeDriver, injects your saved LinkedIn cookies, and returns
-    a logged-in driver.  Optionally overrides UA and/or proxy.
-    """
-    opts = uc.ChromeOptions()
-    # Don't set custom User-Agent as it causes browser crashes
-    # if user_agent:
-    #     opts.add_argument(f"--user-agent={user_agent}")
-    if proxy:
-        opts.add_argument(f"--proxy-server={proxy}")
-    driver = uc.Chrome(options=opts)
-
-    # load cookies
-    driver.get("https://www.linkedin.com")
-    cookies = pickle.load(open(cookie_path, "rb"))
-    for c in cookies:
-        driver.add_cookie(c)
+    # Load cookies
+    cookies = load_cookies()
+    if cookies:
+        for cookie in cookies:
+            try:
+                driver.add_cookie(cookie)
+            except Exception as e:
+                print(f"Warning: Could not set cookie {cookie.get('name', 'unknown')}: {e}")
+    
     driver.refresh()
     time.sleep(3)
-    return driver
-
-
-# Import API helpers
-from api_helpers import (
-    get_job_details_api, 
-    get_repost_status_batch, 
-    get_job_details_with_retry,
-    batch_get_job_details,
-    setup_api_session
-)
-
-
-def is_blacklisted(company_id, company_name):
-    """Check if company should be blacklisted."""
-    if company_id and company_id in BLACKLIST_COMPANY_IDS: 
-        return True
-    if company_name and BLACKLIST_RE.search(company_name): 
-        return True
-    return False
-
-
-def parse_date(iso: str):
-    """Parse date string to datetime."""
-    if not iso: 
-        return None
-    iso = iso.strip()
-    if iso.endswith('Z'):
-        iso = iso[:-1] + '+00:00'
-    try:
-        dt = datetime.fromisoformat(iso)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt
-    except ValueError:
-        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", iso):
-            return datetime.strptime(iso, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-        return None
-
-
-def parse_relative_date(relative_str: str):
-    """Parse relative date strings like '2 days ago' to datetime."""
-    if not relative_str:
-        return None
     
-    relative_str = relative_str.lower().strip()
-    now = datetime.now(timezone.utc)
+    # Extract session data
+    cookies = driver.get_cookies()
+    jsessionid = next((c['value'] for c in cookies if c['name'] == 'JSESSIONID'), '').strip('"')
+    if jsessionid.startswith('ajax:'):
+        jsessionid = jsessionid[5:]
+    csrf_token = f'ajax:{jsessionid}' if jsessionid else None
+    
+    # Create requests session
+    import requests
+    session = requests.Session()
+    for cookie in cookies:
+        session.cookies.set(cookie['name'], cookie['value'], domain=cookie.get('domain'))
+    
+    session.headers.update({
+        'Accept': 'application/vnd.linkedin.normalized+json+2.1',
+        'csrf-token': csrf_token,
+        'x-restli-protocol-version': '2.0.0',
+        'User-Agent': driver.execute_script("return navigator.userAgent;")
+    })
+    
+    return driver, session
+
+def get_jobs_api(session, keywords, exp_level, job_type, workplace_type, count=100):
+    """Get jobs from API for specific shard parameters"""
+    url = f'https://www.linkedin.com/voyager/api/voyagerJobsDashJobCards?decorationId=com.linkedin.voyager.dash.deco.jobs.search.JobSearchCardsCollectionLite-88&count={count}&q=jobSearch&query=(currentJobId:4289275995,origin:JOB_SEARCH_PAGE_JOB_FILTER,keywords:{keywords},locationUnion:(geoId:103644278),selectedFilters:(distance:List(25),experience:List({exp_level}),jobType:List({job_type}),workplaceType:List({workplace_type}),timePostedRange:List(r604800)),spellCorrectionEnabled:true)&servedEventEnabled=false&start=0'
     
     try:
-        # Patterns like "2 days ago", "1 week ago", etc.
-        import re
-        patterns = [
-            (r'(\d+)\s+(day)s?\s+ago', lambda x: now - timedelta(days=int(x))),
-            (r'(\d+)\s+(week)s?\s+ago', lambda x: now - timedelta(weeks=int(x))),
-            (r'(\d+)\s+(month)s?\s+ago', lambda x: now - timedelta(days=int(x)*30)),
-            (r'(\d+)\s+(hour)s?\s+ago', lambda x: now - timedelta(hours=int(x))),
-            (r'(\d+)\s+(minute)s?\s+ago', lambda x: now - timedelta(minutes=int(x))),
-        ]
+        response = session.get(url, timeout=15)
+        if response.status_code != 200:
+            return []
         
-        for pattern, converter in patterns:
-            match = re.search(pattern, relative_str)
-            if match:
-                number = match.group(1)
-                return converter(number)
+        data = response.json()
+        elements = data.get('data', {}).get('elements', [])
         
-        # Handle "just now", "today", etc.
-        if 'just now' in relative_str or 'today' in relative_str:
-            return now
-        if 'yesterday' in relative_str:
-            return now - timedelta(days=1)
+        # Extract job IDs and get details
+        jobs = []
+        for element in elements:
+            job_card_urn = element.get('jobCardUnion', {}).get('*jobPostingCard', '')
+            job_id_match = re.search(r'(\d+)', job_card_urn)
+            if job_id_match:
+                job_id = job_id_match.group(1)
+                job_details = get_job_details_api(session, job_id)
+                if job_details and not is_blacklisted(job_details.get('company_name', '')):
+                    jobs.append(job_details)
+        
+        return jobs
+        
+    except Exception as e:
+        print(f"   ❌ API error: {e}")
+        return []
+
+def get_job_details_api(session, job_id):
+    """Get detailed information for a specific job via API"""
+    url = f'https://www.linkedin.com/voyager/api/jobs/jobPostings/{job_id}'
+    
+    try:
+        response = session.get(url, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            job_data = data.get('data', data)
             
-    except Exception:
+            title = job_data.get('title', 'N/A')
+            is_repost = job_data.get('repostedJob', False)
+            
+            # Extract posting date
+            posted_dt = None
+            for date_field in ['timeAt', 'listedAt', 'postedAt']:
+                if date_field in job_data:
+                    timestamp = job_data[date_field]
+                    if isinstance(timestamp, (int, float)):
+                        posted_dt = datetime.fromtimestamp(timestamp / 1000, tz=timezone.utc).isoformat()
+                        break
+            
+            # Extract company name from URL path segment
+            company_name = 'N/A'
+            url_path = job_data.get('urlPathSegment', '')
+            if url_path:
+                # Extract company name from URL path like "junior-legal-specialist-at-robin-ai-4289326695"
+                parts = url_path.split('-at-')
+                if len(parts) > 1:
+                    company_part = parts[1].split('-')[:-1]  # Remove the job ID at the end
+                    company_name = ' '.join(company_part).title()
+            
+            # Fallback: try companyDetails if URL extraction fails
+            if company_name == 'N/A' and 'companyDetails' in job_data:
+                company_details = job_data['companyDetails']
+                if 'companyName' in company_details:
+                    company_name = company_details['companyName']
+                elif 'company' in company_details and isinstance(company_details['company'], dict):
+                    company_name = company_details['company'].get('name', 'N/A')
+            
+            # Extract apply URL (prefer companyApplyUrl if available)
+            apply_url = f'https://www.linkedin.com/jobs/view/{job_id}/'
+            if 'applyMethod' in job_data:
+                apply_method = job_data['applyMethod']
+                if 'companyApplyUrl' in apply_method:
+                    apply_url = apply_method['companyApplyUrl']
+            
+            return {
+                'job_id': job_id,
+                'title': title,
+                'company_name': company_name,
+                'posted_dt': posted_dt,
+                'is_repost': is_repost,
+                'url': apply_url,
+                'source': 'api'
+            }
+    except:
         pass
     
     return None
 
-
-# Old API functions removed - now using api_helpers.py
-
-
-def parse_date_from_card(card):
-    """
-    Parse date from left panel job card.
-    Returns posted_dt or None.
-    """
-    posted_dt = None
-    
-    # Strategy 1: Standard date parsing with multiple selectors
-    date_selectors = [
-        'time[datetime]',
-        '.job-card-container__footer-item time[datetime]',
-        '.job-card-list__footer-wrapper time[datetime]',
-        '.job-card-container__metadata-wrapper time[datetime]',
-        '.artdeco-entity-lockup__metadata time[datetime]',
-        'li:not(.job-card-container__footer-item) time[datetime]'
-    ]
-    
-    for selector in date_selectors:
-        try:
-            date_elem = card.select_one(selector)
-            if date_elem:
-                datetime_attr = date_elem.get('datetime')
-                posted_dt = parse_date(datetime_attr)
-                if posted_dt:
-                    break
-        except:
-            continue
-    
-    # Strategy 2: Text-based extraction (fallback)
-    if not posted_dt:
-        card_text = card.get_text().lower()
-        import re
-        date_patterns = [
-            r'(\d+)\s+(day|week|month|hour)s?\s+ago',
-            r'(\d+)\s+(day|week|month|hour)\s+ago',
-            r'(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)',
-            r'(\d{4}-\d{2}-\d{2})'
-        ]
+def check_page_has_jobs(driver, timeout=10):
+    """Quickly check if page has job cards without waiting for full load"""
+    try:
+        # Wait for either job cards or "no results" message
+        wait = WebDriverWait(driver, timeout)
         
-        for pattern in date_patterns:
-            match = re.search(pattern, card_text, re.IGNORECASE)
-            if match:
-                posted_dt = parse_relative_date(match.group(0))
-                break
-    
-    return posted_dt
-
-
-def build_url(p, start):
-    """Build LinkedIn job search URL."""
-    return (
-        "https://www.linkedin.com/jobs/search"
-        f"?keywords={quote(p['keywords'])}"
-        f"&location={quote(BASE['location'])}"
-        f"&geoId={p['geoId']}"
-        f"&f_TPR={p['f_TPR']}"
-        f"&f_E={p['f_E']}"
-        f"&f_JT={p['f_JT']}"
-        f"&f_WT={p['f_WT']}"
-        f"&start={start}"
-        f"&f_VJ=true"
-        f"&sortBy=DD"  # Date Descending - most recent first
-    )
-
-
-def shard_key(params: dict) -> str:
-    """Generate stable hash for shard."""
-    packed = json.dumps(params, sort_keys=True, separators=(",", ":")).encode()
-    return hashlib.sha1(packed).hexdigest()
-
-
-def register_shard(shards: dict, params: dict, sig: tuple, rank: int):
-    """Register a new shard."""
-    sid = shard_key(params)
-    if sid not in shards:
-        fE, fJT, fWT = sig
-        shards[sid] = {
-            "rank": rank,
-            "params": params,
-            "sig": sig,
-            "meta": {
-                "kw_lbl": "catch_all",
-                "geo_lbl": "US",
-                "experience_lbl": EXP_LABEL.get(fE, fE),
-                "job_type_lbl": JT_LABEL.get(fJT, fJT),
-                "workplace_lbl": WT_LABEL.get(fWT, fWT),
-                "date_from": None,
-                "date_to": None,
-            }
-        }
-    return sid
-
-
-def page_has_no_results(driver):
-    """Check if page has no search results."""
-    no_results_selectors = [
-        'div[class*="no-results"]',
-        'div[class*="empty"]',
-        'div[class*="no-jobs"]',
-        '.jobs-search-no-results-banner',
-        '.jobs-search-results-list__no-jobs-available-card'
-    ]
-    
-    for selector in no_results_selectors:
-        if driver.find_elements(By.CSS_SELECTOR, selector):
-            print(f"   🚫 Found no-results selector: {selector}")
-            return True
-    
-    # Check for job cards directly
-    job_cards = driver.find_elements(By.CSS_SELECTOR, 'li[data-occludable-job-id]')
-    print(f"   🔍 Found {len(job_cards)} job cards on page")
-    
-    if len(job_cards) == 0:
-        print(f"   🚫 No job cards found on page")
+        # Check for job cards first
+        job_cards = wait.until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, 'li[data-occludable-job-id]'))
+        )
         return True
-    
-    # Check for empty state text (simplified approach)
-    page_text = driver.page_source.lower()
-    empty_indicators = [
-        'no matching jobs found',
-        'we couldn\'t find any jobs',
-        'no results found'
-    ]
-    
-    for indicator in empty_indicators:
-        if indicator in page_text:
-            print(f"   🚫 Found empty indicator: {indicator}")
-            return True
+        
+    except TimeoutException:
+        # Check for "no results" message
+        try:
+            no_results = driver.find_element(By.CSS_SELECTOR, '.jobs-search-no-results-banner')
+            return False
+        except NoSuchElementException:
+            # Check for any job cards that might have loaded
+            job_cards = driver.find_elements(By.CSS_SELECTOR, 'li[data-occludable-job-id]')
+            return len(job_cards) > 0
     
     return False
 
-
-def parse_cards_from_ul_html(ul_outer_html, driver=None, blacklist_companies=None):
-    """Parse job cards from HTML with hybrid date extraction and API enhancement."""
-    if blacklist_companies is None:
-        blacklist_companies = BLACKLIST_COMPANY_IDS
-
-    soup = BeautifulSoup(ul_outer_html, 'html.parser')
-    job_cards = soup.select('li[data-occludable-job-id]')
-    
-    print(f"   🔍 Found {len(job_cards)} job cards in HTML")
-    
-    # Collect job IDs for batch repost status lookup
-    job_ids = []
-    job_data = []
-    processed_count = 0
-    blacklisted_count = 0
-    
-    for card in job_cards:
-        job_id = card.get('data-occludable-job-id')
-        if not job_id:
-            continue
-        
-        job_link = card.select_one('a.job-card-container__link')
-        if not job_link:
-            continue
-        
-        href = job_link.get('href', '')
-        url = urljoin('https://www.linkedin.com', href)
-        
-        title = job_link.get('aria-label', '').strip()
-        if not title:
-            title_elem = job_link.select_one('strong')
-            title = title_elem.get_text(strip=True) if title_elem else "N/A"
-        
-        # Remove "with verification" suffix from titles
-        if title.endswith(' with verification'):
-            title = title[:-17].strip()
-        
-        company_elem = card.select_one('.artdeco-entity-lockup__subtitle span')
-        company_name = company_elem.get_text(strip=True) if company_elem else "N/A"
-        
-        company_id = None
-        company_link = card.select_one('.artdeco-entity-lockup__subtitle a')
-        if company_link:
-            company_href = company_link.get('href', '')
-            company_id_match = re.search(r'/company/(\d+)', company_href)
-            if company_id_match:
-                company_id = company_id_match.group(1)
-        
-        if is_blacklisted(company_id, company_name):
-            if company_id:
-                blacklist_companies.add(company_id)
-            print(f"   🚫 Blacklisted: {company_name} (ID: {company_id})")
-            blacklisted_count += 1
-            continue
-        
-        processed_count += 1
-        
-        # Strategy 1: Parse date from left panel
-        posted_dt = parse_date_from_card(card)
-        
-        # Strategy 2: Use API if left panel failed
-        if not posted_dt and driver:
-            print(f"   🔍 Trying API for job {job_id} (no date found in left panel)")
-            api_details = get_job_details_with_retry(job_id, driver)
-            if api_details and api_details.get('posted_dt'):
-                posted_dt = api_details['posted_dt']
-        
-        job_ids.append(job_id)
-        job_data.append({
-            "job_id": job_id,
-            "title": title,
-            "posted_dt": posted_dt,
-            "company_name": company_name,
-            "url": url,
-        })
-    
-    # Get repost status for all jobs in batch
-    repost_status = {}
-    if job_ids and driver:
-        repost_status = get_repost_status_batch(job_ids, driver)
-    
-    # Combine data with repost status
-    for job in job_data:
-        job_id = job["job_id"]
-        job["is_repost"] = repost_status.get(job_id, False)
-        yield job
-    
-    print(f"   📊 Processing summary: {processed_count} processed, {blacklisted_count} blacklisted, {len(job_data)} yielded")
-
-
-def add_job_links(jid: str, sid: str, jobs_for_shard: dict, shards_for_job: dict):
-    """Link jobs to shards."""
-    if not jobs_for_shard[sid] or jobs_for_shard[sid][-1] != jid:
-        jobs_for_shard[sid].append(jid)
-    if sid not in shards_for_job[jid]:
-        shards_for_job[jid].append(sid)
-
-
-def human_scroll(driver, pane, steps=5):
-    """Human-like scrolling."""
-    height = driver.execute_script("return arguments[0].scrollHeight", pane)
-    for i in range(steps):
-        y = height * (i + 1) / steps
-        driver.execute_script("arguments[0].scrollTo(0, arguments[1]);", pane, y)
-        time.sleep(random.uniform(0.2, 0.6))
-
-
-def hover_on_job(driver):
-    """Hover over random job card."""
-    actions = ActionChains(driver)
-    card = random.choice(driver.find_elements(By.CSS_SELECTOR, "li.scaffold-layout__list-item"))
-    actions.move_to_element(card).pause(random.uniform(0.5, 1.2)).perform()
-
-
-def back_and_forth(driver, pane):
-    """Back and forth scrolling."""
-    driver.execute_script("arguments[0].scrollBy(0, -100);", pane)
-    time.sleep(random.uniform(0.3, 0.8))
-    driver.execute_script("arguments[0].scrollBy(0, 100);", pane)
-    time.sleep(random.uniform(0.3, 0.8))
-
-
-def progressive_scroll_and_load(driver, pane, max_attempts=20):
-    """
-    Progressive scrolling to load all lazy-loaded jobs with anti-bot measures.
-    Returns True if new content was loaded, False if no more content.
-    """
-    previous_job_count = 0
-    stable_count = 0
-    scroll_position = 0
-    
-    for attempt in range(max_attempts):
-        # Get current job count
-        current_jobs = pane.find_elements(By.CSS_SELECTOR, 'li[data-occludable-job-id]')
-        current_count = len(current_jobs)
-        
-        if current_count > previous_job_count:
-            print(f"   📊 Loaded {current_count} jobs (+{current_count - previous_job_count})")
-            previous_job_count = current_count
-            stable_count = 0
-        else:
-            stable_count += 1
-            
-        # If no new jobs loaded for 3 consecutive attempts, we're done
-        if stable_count >= 3:
-            print(f"   ✅ Finished loading - total jobs: {current_count}")
-            break
-            
-        # Progressive scroll down with anti-bot measures
-        scroll_increment = random.randint(600, 1000)  # Random scroll distance
-        scroll_position += scroll_increment
-        
-        driver.execute_script(f"arguments[0].scrollTo(0, {scroll_position});", pane)
-        
-        # Anti-bot: Variable wait times with human-like patterns
-        base_wait = random.uniform(2.0, 4.0)  # Longer base wait
-        if attempt % 3 == 0:  # Every 3rd attempt, longer pause
-            base_wait += random.uniform(1.0, 2.0)
-        time.sleep(base_wait)
-        
-        # Occasional back-and-forth for human-like behavior
-        if attempt % 4 == 0:
-            back_and_forth(driver, pane)
-            time.sleep(random.uniform(0.5, 1.5))  # Extra pause after back-and-forth
-            
-        # Hover occasionally with longer pauses
-        if attempt % 6 == 0:
-            try:
-                hover_on_job(driver)
-                time.sleep(random.uniform(1.0, 2.0))  # Pause after hover
-            except:
-                pass  # Ignore hover errors
-        
-        # Anti-bot: Random micro-pauses
-        if random.random() < 0.3:  # 30% chance
-            time.sleep(random.uniform(0.5, 1.0))
-    
-    # Final scroll to very bottom to ensure we got everything
-    driver.execute_script("arguments[0].scrollTo(0, arguments[0].scrollHeight);", pane)
-    time.sleep(random.uniform(2.0, 3.0))  # Longer final wait
-    
-    final_jobs = pane.find_elements(By.CSS_SELECTOR, 'li[data-occludable-job-id]')
-    final_count = len(final_jobs)
-    
-    if final_count > previous_job_count:
-        print(f"   📊 Final scroll loaded {final_count} jobs (+{final_count - previous_job_count})")
-    
-    return final_count
-
-
-def scrape_jobs(driver, max_pages=5, max_shards=10):  # Testing with 5 pages and 10 shards
-    """Main scraping function - hybrid approach."""
-    
-    EW = len(WT_CODES)
-    EJW = len(JT_CODES) * EW
-    total_shards = min(max_shards, len(EXP_CODES) * len(JT_CODES) * len(WT_CODES))
-    processed_shards = 0
-    
-    for e_idx, fE in enumerate(EXP_CODES):
-        for j_idx, fJT in enumerate(JT_CODES):
-            for w_idx, fWT in enumerate(WT_CODES):
-                
-                params = dict(BASE, **{"f_E": fE, "f_JT": fJT, "f_WT": fWT})
-                rank = e_idx * EJW + j_idx * EW + w_idx
-                sid = register_shard(shards, params, (fE, fJT, fWT), rank)
-
-                processed_shards += 1
-                print(f"🔍 Processing shard {sid[:6]} rank={rank} ({processed_shards}/{total_shards})")
-                
-                # Stop after max_shards for testing
-                if processed_shards >= max_shards:
-                    print(f"🛑 Stopping after {max_shards} shards for testing")
-                    return
-                
-                try:
-                    driver.get(build_url(params, start=0))
-                    print(f"   🌐 Loaded URL: {driver.current_url}")
-                    if page_has_no_results(driver):
-                        print(f"❌ No results for shard {sid[:6]} rank={rank} | {params}")
-                        continue
-                    
-                    WebDriverWait(driver, 15).until(
-                        EC.presence_of_element_located((By.CSS_SELECTOR, "li[data-occludable-job-id]"))
-                    )
-                    pane = driver.find_element(By.XPATH, "//ul[li[@data-occludable-job-id]]")
-
-                    for start in range(0, max_pages * 25, 25):
-                        try:
-                            if start > 0:
-                                driver.get(build_url(params, start))
-                                time.sleep(2)  # Reduced wait time
-                                
-                                WebDriverWait(driver, 15).until(
-                                    EC.presence_of_element_located((By.CSS_SELECTOR, "li[data-occludable-job-id]"))
-                                )
-                                pane = driver.find_element(By.XPATH, "//ul[li[@data-occludable-job-id]]")
-
-                            # Progressive scroll to load ALL jobs with lazy loading
-                            jobs_loaded = progressive_scroll_and_load(driver, pane)
-                            
-                            # Extract all loaded jobs
-                            html = pane.get_attribute("outerHTML")
-                            page_jobs_before = len(jobs)
-
-                            for rec in parse_cards_from_ul_html(html, driver):
-                                jid = rec["job_id"]
-                                if jid not in jobs:
-                                    jobs[jid] = rec
-                                add_job_links(jid, sid, jobs_for_shard, shards_for_job)
-
-                            new_jobs_added = len(jobs) - page_jobs_before
-                            print(f' ✅ shard {sid[:6]} rank={rank} page {start//25 + 1} | Found {jobs_loaded} jobs on page, added {new_jobs_added} new jobs | Total: {len(jobs)}')
-                            
-                            # If we didn't get many jobs, this might be the last page
-                            if jobs_loaded < 10:
-                                print(f"   🔚 Few jobs found ({jobs_loaded}), likely last page for this shard")
-                                break
-                            
-                            # Anti-bot: Random pause between pages
-                            page_pause = random.uniform(3.0, 6.0)
-                            print(f"   ⏳ Pausing {page_pause:.1f}s before next page...")
-                            time.sleep(page_pause)
-                            
-                        except Exception as page_error:
-                            print(f"❌ Error on shard {sid[:6]} page {start//25 + 1}: {page_error}")
-                            break  # Move to next shard
-                            
-                except Exception as shard_error:
-                    print(f"❌ Error on shard {sid[:6]} rank={rank}: {shard_error}")
-                    continue  # Move to next shard
-                
-                # Anti-bot: Longer pause between shards
-                shard_pause = random.uniform(5.0, 10.0)
-                print(f"   ⏳ Pausing {shard_pause:.1f}s before next shard...")
-                time.sleep(shard_pause)
-
-
-def save_results():
-    """Save results to files."""
-    with open('scraped_jobs.json', 'w') as f:
-        json.dump(jobs, f, indent=2, default=str)
-    with open('scraped_shards.json', 'w') as f:
-        json.dump(shards, f, indent=2, default=str)
-    with open('job_shard_mappings.json', 'w') as f:
-        mappings = {
-            'jobs_for_shard': dict(jobs_for_shard),
-            'shards_for_job': dict(shards_for_job)
+def get_jobs_dom_smart(driver, keywords, exp_level, job_type, workplace_type):
+    """Smart DOM extraction with early empty page detection"""
+    try:
+        # Build search URL
+        base_url = "https://www.linkedin.com/jobs/search"
+        params = {
+            'keywords': keywords.replace('%22', '"').replace('%20', ' '),
+            'location': 'United States',
+            'geoId': '103644278',
+            'f_E': exp_level,
+            'f_JT': job_type,
+            'f_WT': workplace_type,
+            'f_TPR': 'r604800',
+            'sortBy': 'DD'
         }
-        json.dump(mappings, f, indent=2)
-    print(f"💾 Saved {len(jobs)} jobs and {len(shards)} shards")
+        
+        url = base_url + '?' + '&'.join([f'{k}={v}' for k, v in params.items()])
+        driver.get(url)
+        
+        # Quick check for jobs (with shorter timeout)
+        if not check_page_has_jobs(driver, timeout=8):
+            print(f"   📭 No jobs found on page (early detection)")
+            return []
+        
+        # If jobs exist, wait a bit more for full load
+        time.sleep(2)
+        
+        # Find job cards
+        job_cards = driver.find_elements(By.CSS_SELECTOR, 'li[data-occludable-job-id]')
+        
+        if not job_cards:
+            print(f"   📭 No job cards found after load")
+            return []
+        
+        print(f"   📄 Found {len(job_cards)} job cards in DOM")
+        
+        jobs = []
+        for i, card in enumerate(job_cards[:25]):  # Limit to 25 per shard
+            try:
+                job_id = card.get_attribute('data-occludable-job-id')
+                if not job_id:
+                    continue
+                
+                # Extract title
+                try:
+                    title_elem = card.find_element(By.CSS_SELECTOR, 'h3 a span[title]')
+                    title = title_elem.get_attribute('title') if title_elem else 'N/A'
+                except NoSuchElementException:
+                    title = 'N/A'
+                
+                # Extract company
+                try:
+                    company_elem = card.find_element(By.CSS_SELECTOR, 'h4 a')
+                    company_name = company_elem.text.strip() if company_elem else 'N/A'
+                except NoSuchElementException:
+                    company_name = 'N/A'
+                
+                # Skip blacklisted companies
+                if is_blacklisted(company_name):
+                    continue
+                
+                # Extract posting date
+                posted_dt = None
+                try:
+                    time_elem = card.find_element(By.CSS_SELECTOR, 'time[datetime]')
+                    datetime_attr = time_elem.get_attribute('datetime')
+                    if datetime_attr:
+                        posted_dt = datetime.fromisoformat(datetime_attr.replace('Z', '+00:00')).isoformat()
+                except:
+                    pass
+                
+                jobs.append({
+                    'job_id': job_id,
+                    'title': title,
+                    'company_name': company_name,
+                    'posted_dt': posted_dt,
+                    'is_repost': False,  # DOM can't detect reposts reliably
+                    'url': f'https://www.linkedin.com/jobs/view/{job_id}/',
+                    'source': 'dom'
+                })
+                
+            except Exception as e:
+                continue
+        
+        return jobs
+        
+    except Exception as e:
+        print(f"   ❌ DOM error: {e}")
+        return []
 
+def is_blacklisted(company_name):
+    """Check if company is blacklisted"""
+    if not company_name or company_name == 'N/A':
+        return False
+    return bool(BLACKLIST_RE.search(company_name))
+
+def scrape_shard_optimized(session, driver, keywords, exp_level, job_type, workplace_type, shard_num, total_shards):
+    """Scrape a single shard with optimized API-first + smart DOM fallback"""
+    
+    exp_label = EXP_LABEL.get(exp_level, exp_level)
+    jt_label = JT_LABEL.get(job_type, job_type) 
+    wt_label = WT_LABEL.get(workplace_type, workplace_type)
+    
+    print(f"\n📋 Shard {shard_num}/{total_shards}: {exp_label} + {jt_label} + {wt_label}")
+    
+    # Try API first
+    print(f"   🔍 Trying API...")
+    api_jobs = get_jobs_api(session, keywords, exp_level, job_type, workplace_type)
+    
+    if api_jobs:
+        print(f"   ✅ API success: {len(api_jobs)} jobs")
+        return api_jobs
+    else:
+        print(f"   ⚠️ API failed, trying smart DOM fallback...")
+        dom_jobs = get_jobs_dom_smart(driver, keywords, exp_level, job_type, workplace_type)
+        print(f"   📄 DOM fallback: {len(dom_jobs)} jobs")
+        return dom_jobs
+
+def scrape_all_shards_optimized(keywords, max_shards=None):
+    """Scrape all shard combinations with optimized approach"""
+    print("🚀 Starting Final Optimized LinkedIn Scraper")
+    
+    # Setup single driver and session
+    driver, api_session = setup_driver_and_session()
+    
+    # Generate all shard combinations
+    all_jobs = []
+    shard_results = {}
+    shard_mappings = {}  # Track which jobs came from which shards
+    shard_num = 0
+    total_possible = len(EXP_CODES) * len(JT_CODES) * len(WT_CODES)
+    
+    print(f"📊 Processing up to {max_shards or total_possible} shards (of {total_possible} total combinations)")
+    
+    try:
+        for exp_level in EXP_CODES:
+            for job_type in JT_CODES:
+                for workplace_type in WT_CODES:
+                    shard_num += 1
+                    
+                    if max_shards and shard_num > max_shards:
+                        print(f"\n🔚 Reached max shards limit: {max_shards}")
+                        break
+                    
+                    # Scrape this shard
+                    shard_jobs = scrape_shard_optimized(api_session, driver, keywords, exp_level, job_type, workplace_type, shard_num, max_shards or total_possible)
+                    
+                    # Track results
+                    shard_key = f"{exp_level}_{job_type}_{workplace_type}"
+                    shard_results[shard_key] = {
+                        'exp_level': exp_level,
+                        'job_type': job_type,
+                        'workplace_type': workplace_type,
+                        'job_count': len(shard_jobs),
+                        'labels': f"{EXP_LABEL[exp_level]}+{JT_LABEL[job_type]}+{WT_LABEL[workplace_type]}"
+                    }
+                    
+                    # Track shard mappings for each job
+                    for job in shard_jobs:
+                        job_id = job['job_id']
+                        if job_id not in shard_mappings:
+                            shard_mappings[job_id] = []
+                        shard_mappings[job_id].append({
+                            'shard_key': shard_key,
+                            'shard_num': shard_num,
+                            'labels': shard_results[shard_key]['labels']
+                        })
+                    
+                    # Add jobs (with deduplication)
+                    existing_ids = {job['job_id'] for job in all_jobs}
+                    new_jobs = [job for job in shard_jobs if job['job_id'] not in existing_ids]
+                    all_jobs.extend(new_jobs)
+                    
+                    print(f"   📊 Added {len(new_jobs)} new jobs (total: {len(all_jobs)})")
+                    
+                    # Strategic rate limiting between shards
+                    if shard_num % 5 == 0:  # Longer wait every 5 shards
+                        wait_time = random.uniform(5.0, 8.0)
+                        print(f"   ⏳ Taking longer break ({wait_time:.1f}s)...")
+                    else:
+                        wait_time = random.uniform(2.0, 4.0)
+                    
+                    time.sleep(wait_time)
+                    
+                if max_shards and shard_num >= max_shards:
+                    break
+            if max_shards and shard_num >= max_shards:
+                break
+    
+    finally:
+        driver.quit()
+    
+    return all_jobs, shard_results, shard_mappings
 
 def main():
-    """Main function - hybrid approach."""
-    # Parse command line arguments
-    parser = argparse.ArgumentParser(
-        description='LinkedIn Job Scraper - Hybrid API + DOM Approach',
-        epilog='''
-Examples:
-  python linkedin_scraper.py                    # Default: 5 pages, 10 shards
-  python linkedin_scraper.py --max_pages 3      # 3 pages per shard
-  python linkedin_scraper.py --max_shards 5     # Process only 5 shards
-  python linkedin_scraper.py --max_pages 2 --max_shards 3  # Quick test
-        '''
-    )
-    parser.add_argument('--max_pages', type=int, default=5, 
-                       help='Maximum number of pages to scrape per shard (default: 5)')
-    parser.add_argument('--max_shards', type=int, default=10,
-                       help='Maximum number of shards to process (default: 10)')
-    parser.add_argument('--keywords', type=str, 
-                       default='"AI" OR "Generative AI" OR "LLM" OR "Large Language Model" OR "Prompt Engineering" OR "Foundation Model" OR "Transformer" OR "RAG" OR "Reinforcement Learning With Human Feedback" OR "RLHF"',
-                       help='Search keywords (default: AI-related terms)')
-    parser.add_argument('--location', type=str, default='United States',
-                       help='Search location (default: United States)')
+    """Main function"""
+    # Keywords for AI jobs (URL encoded)
+    keywords = '%22AI%22%20OR%20%22Generative%20AI%22%20OR%20%22LLM%22%20OR%20%22Large%20Language%20Model%22%20OR%20%22Prompt%20Engineering%22%20OR%20%22Foundation%20Model%22%20OR%20%22Transformer%22%20OR%20%22RAG%22%20OR%20%22Reinforcement%20Learning%20With%20Human%20Feedback%22%20OR%20%22RLHF%22%20NOT%20Jobright.ai'
     
-    args = parser.parse_args()
+    # Scrape with fewer shards for testing
+    all_jobs, shard_results, shard_mappings = scrape_all_shards_optimized(keywords, max_shards=5)  # Test with 5 shards first
     
-    print("🚀 Starting LinkedIn Job Scraper - Hybrid API + DOM Approach")
-    print(f"📋 Settings: max_pages={args.max_pages}, max_shards={args.max_shards}")
-    print(f"🔍 Keywords: {args.keywords}")
-    print(f"📍 Location: {args.location}")
+    # Save results
+    with open('linkedin_jobs.json', 'w') as f:
+        json.dump(all_jobs, f, indent=2, default=str)
     
-    # Clear old data
-    global jobs, shards, jobs_for_shard, shards_for_job
-    jobs = {}
-    shards = {}
-    jobs_for_shard = defaultdict(list)
-    shards_for_job = defaultdict(list)
+    with open('shard_results.json', 'w') as f:
+        json.dump(shard_results, f, indent=2)
     
-    driver = None
+    with open('shard_mappings.json', 'w') as f:
+        json.dump(shard_mappings, f, indent=2)
     
-    # Simple approach: try cookies first, then login if needed  
-    try:
-        driver = make_driver_with_cookies()  # Use default User Agent
-        print("✅ Using existing session")
-        
-        # Setup API session
-        setup_api_session(driver)
-        
-    except Exception as e:
-        print(f"❌ Session error: {e}")
-        print("🔄 Logging in...")
-        
-        # Get credentials from .env or user input
-        email = os.getenv('LINKEDIN_EMAIL')
-        password = os.getenv('LINKEDIN_PASSWORD')
-        
-        if not email or not password:
-            from getpass import getpass
-            email = input("LinkedIn email: ")
-            password = getpass("LinkedIn password: ")
-        
-        # Login and save session
-        login_and_save_cookies(email, password)
-        
-        # Load session
-        driver = make_driver_with_cookies()  # Use default User Agent
-        print("✅ Login successful")
-        
-        # Setup API session
-        setup_api_session(driver)
+    # Show summary
+    print(f"\n📊 Final Results:")
+    print(f"   Total unique jobs: {len(all_jobs)}")
+    print(f"   API jobs: {len([j for j in all_jobs if j['source'] == 'api'])}")
+    print(f"   DOM jobs: {len([j for j in all_jobs if j['source'] == 'dom'])}")
+    print(f"   Jobs with titles: {len([j for j in all_jobs if j['title'] != 'N/A'])}")
+    print(f"   Jobs with dates: {len([j for j in all_jobs if j['posted_dt']])}")
+    print(f"   Reposts: {len([j for j in all_jobs if j['is_repost']])}")
+    print(f"   Shards processed: {len(shard_results)}")
     
-    # Run the scraper
-    try:
-        scrape_jobs(driver, max_pages=args.max_pages, max_shards=args.max_shards)
-        save_results()
-        print(f"🎉 Scraping completed! Found {len(jobs)} unique jobs")
-        print(f"📊 Processed {args.max_shards} shards (max {len(EXP_CODES) * len(JT_CODES) * len(WT_CODES)} total available)")
-    except KeyboardInterrupt:
-        print("\n⏹️ Scraping interrupted")
-        save_results()
-    except Exception as e:
-        print(f"❌ Critical error: {e}")
-        save_results()
-    finally:
-        if driver:
-            driver.quit()
-
+    # Show top productive shards
+    productive_shards = sorted(shard_results.items(), key=lambda x: x[1]['job_count'], reverse=True)
+    print(f"\n🏆 Top Productive Shards:")
+    for i, (shard_key, data) in enumerate(productive_shards[:3]):
+        print(f"   {i+1}. {data['labels']}: {data['job_count']} jobs")
+    
+    print(f"\n💾 Saved to:")
+    print(f"   - linkedin_jobs.json (jobs)")
+    print(f"   - shard_results.json (shard stats)")
+    print(f"   - shard_mappings.json (job-to-shard mapping)")
 
 if __name__ == "__main__":
     main() 
