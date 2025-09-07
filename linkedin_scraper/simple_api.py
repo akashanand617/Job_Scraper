@@ -47,7 +47,7 @@ DEFAULT_KEYWORDS = "AI OR Machine Learning OR Data Science OR Generative AI OR L
 class ScrapeRequest(BaseModel):
     keywords: Optional[str] = None
     max_shards: Optional[int] = 126  # Maximum: 6 exp × 7 job types × 3 workplace types
-    mode: str = "daily"  # daily or weekly
+    mode: Optional[str] = "daily"  # daily or weekly
 
 class FilterRequest(BaseModel):
     experience_level: Optional[str] = None  # intern, entry, associate, mid-senior, director, executive
@@ -190,15 +190,34 @@ async def get_scrape_status(job_id: str):
 
 @app.get("/jobs")
 async def list_jobs():
-    """List all jobs"""
+    """List all scraped LinkedIn jobs"""
+    try:
+        if not os.path.exists('data/linkedin_jobs_simplified.json'):
+            return {"total_jobs": 0, "jobs": []}
+        
+        with open('data/linkedin_jobs_simplified.json', 'r') as f:
+            all_jobs = json.load(f)
+        
+        return {
+            "total_jobs": len(all_jobs),
+            "jobs": all_jobs
+        }
+    except Exception as e:
+        return {"error": f"Error reading jobs: {str(e)}", "total_jobs": 0, "jobs": []}
+
+@app.get("/scrape-jobs")
+async def list_scrape_jobs():
+    """List all background scraping jobs (for tracking)"""
     return {
-        "total_jobs": len(active_jobs),
-        "jobs": [
+        "total_scrape_jobs": len(active_jobs),
+        "scrape_jobs": [
             {
                 "job_id": job_id,
                 "status": job["status"],
                 "mode": job["mode"],
-                "started_at": job["started_at"]
+                "started_at": job["started_at"],
+                "completed_at": job.get("completed_at"),
+                "results": job.get("results")
             }
             for job_id, job in active_jobs.items()
         ]

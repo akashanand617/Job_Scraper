@@ -8,3 +8,7 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
+    disk:
+      name: data-disk
+      mountPath: /opt/render/project/data
+      sizeGB: 1
