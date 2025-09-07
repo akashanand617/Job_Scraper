@@ -316,6 +316,7 @@ async def run_scraper_task(job_id: str, keywords: str, max_shards: int, time_fil
     try:
         active_jobs[job_id]["status"] = "running"
         active_jobs[job_id]["message"] = "Scraping jobs..."
+        print(f"🚀 Starting scraping task {job_id}")
         
         # Run the scraper
         all_jobs, shard_results, shard_mappings = scrape_all_shards_api_only(
@@ -324,6 +325,8 @@ async def run_scraper_task(job_id: str, keywords: str, max_shards: int, time_fil
             resume=False,
             time_filter=time_filter
         )
+        
+        print(f"✅ Scraping completed: {len(all_jobs)} jobs found")
         
         # Save results
         with open('data/linkedin_jobs_simplified.json', 'w') as f:
@@ -340,6 +343,7 @@ async def run_scraper_task(job_id: str, keywords: str, max_shards: int, time_fil
         }
         
     except Exception as e:
+        print(f"❌ Scraping failed: {str(e)}")
         active_jobs[job_id]["status"] = "failed"
         active_jobs[job_id]["message"] = f"Scraping failed: {str(e)}"
         active_jobs[job_id]["completed_at"] = datetime.now().isoformat()

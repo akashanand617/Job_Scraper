@@ -104,8 +104,27 @@ def setup_session():
     # Try to load existing cookies first
     cookies = load_cookies()
     if not cookies:
-        print("❌ No saved cookies found. Please run login.py first.")
-        return None
+        print("❌ No saved cookies found. Attempting to login...")
+        # Try to login automatically
+        try:
+            from login import login_and_save_cookies
+            import os
+            email = os.getenv('LINKEDIN_EMAIL')
+            password = os.getenv('LINKEDIN_PASSWORD')
+            if email and password:
+                login_and_save_cookies(email, password)
+                cookies = load_cookies()
+                if cookies:
+                    print("✅ Auto-login successful!")
+                else:
+                    print("❌ Auto-login failed.")
+                    return None
+            else:
+                print("❌ No LinkedIn credentials found in environment variables.")
+                return None
+        except Exception as e:
+            print(f"❌ Auto-login failed: {e}")
+            return None
     
     # Create requests session directly with existing cookies
     import requests
