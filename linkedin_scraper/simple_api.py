@@ -56,6 +56,7 @@ class FilterRequest(BaseModel):
 active_jobs: Dict[str, Dict] = {}
 
 @app.get("/")
+@app.head("/")
 async def root():
     """Root endpoint"""
     return {
