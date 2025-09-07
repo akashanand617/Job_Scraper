@@ -19,6 +19,7 @@ from pydantic import BaseModel
 # Import your existing scraper
 import sys
 sys.path.append('src')
+import linkedin_scraper
 from linkedin_scraper import scrape_all_shards_api_only
 
 
@@ -82,6 +83,7 @@ async def health_check():
     return {"status": "healthy", "timestamp": datetime.now().isoformat()}
 
 @app.get("/scrape-now")
+@app.head("/scrape-now")
 async def scrape_now(background_tasks: BackgroundTasks):
     """Start scraping immediately with default keywords (no JSON needed)"""
     job_id = str(uuid.uuid4())
