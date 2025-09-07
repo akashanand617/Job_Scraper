@@ -43,11 +43,19 @@ app.add_middleware(
 # Default keywords for your resume automation
 DEFAULT_KEYWORDS = "AI OR Machine Learning OR Data Science OR Generative AI OR LLM OR Large Language Model OR Prompt Engineering OR Foundation Model OR Transformer OR RAG OR Reinforcement Learning With Human Feedback OR RLHF"
 
+# Label mappings (same as in linkedin_scraper.py)
+EXP_LABEL = {"1": "intern", "2": "entry", "3": "associate", "4": "mid-senior", "5": "director", "6": "executive"}
+JT_LABEL = {"I": "internship", "F": "full_time", "C": "contract", "T": "temporary", "P": "part_time", "V": "volunteer", "O": "other"}
+WT_LABEL = {"1": "on_site", "2": "remote", "3": "hybrid"}
+
 # Simple request models
 class ScrapeRequest(BaseModel):
     keywords: Optional[str] = None
     max_shards: Optional[int] = 126  # Maximum: 6 exp × 7 job types × 3 workplace types
     mode: Optional[str] = "daily"  # daily or weekly
+    experience_levels: Optional[list] = None  # ["intern", "entry", "associate", "mid-senior", "director", "executive"]
+    job_types: Optional[list] = None  # ["internship", "full_time", "contract", "temporary", "part_time", "volunteer", "other"]
+    workplace_types: Optional[list] = None  # ["remote", "on_site", "hybrid"]
 
 class FilterRequest(BaseModel):
     experience_level: Optional[str] = None  # intern, entry, associate, mid-senior, director, executive
@@ -130,8 +138,8 @@ async def scrape_now(background_tasks: BackgroundTasks):
         "started_at": datetime.now().isoformat()
     }
     
-    # Start background task
-    background_tasks.add_task(run_scraper_task, job_id, keywords, max_shards, time_filter)
+    # Start background task (no filters - use all parameters)
+    background_tasks.add_task(run_scraper_task, job_id, keywords, max_shards, time_filter, None, None, None)
     
     return {
         "message": "Scraping started with default keywords",
@@ -152,18 +160,53 @@ async def start_scrape(request: ScrapeRequest, background_tasks: BackgroundTasks
     # Use provided keywords or default keywords
     keywords = request.keywords or DEFAULT_KEYWORDS
     
-    # Store job info
+    # Store job info with filters
     active_jobs[job_id] = {
         "status": "starting",
         "mode": request.mode,
         "keywords": keywords,
         "max_shards": request.max_shards,
+        "experience_levels": request.experience_levels,
+        "job_types": request.job_types,
+        "workplace_types": request.workplace_types,
         "started_at": datetime.now().isoformat(),
-        "message": f"Starting {request.mode} scrape..."
+        "message": f"Starting {request.mode} scrape with filters..."
     }
     
-    # Run scraper in background
-    background_tasks.add_task(run_scraper_task, job_id, keywords, request.max_shards, time_filter)
+    # Convert human-readable filters to parameter lists
+    exp_codes = None
+    if request.experience_levels:
+        exp_codes = []
+        for level in request.experience_levels:
+            code = next((code for code, label in EXP_LABEL.items() if label == level), None)
+            if code:
+                exp_codes.append(code)
+            else:
+                raise HTTPException(status_code=400, detail=f"Invalid experience level: {level}")
+    
+    jt_codes = None
+    if request.job_types:
+        jt_codes = []
+        for job_type in request.job_types:
+            code = next((code for code, label in JT_LABEL.items() if label == job_type), None)
+            if code:
+                jt_codes.append(code)
+            else:
+                raise HTTPException(status_code=400, detail=f"Invalid job type: {job_type}")
+    
+    wt_codes = None
+    if request.workplace_types:
+        wt_codes = []
+        for workplace_type in request.workplace_types:
+            code = next((code for code, label in WT_LABEL.items() if label == workplace_type), None)
+            if code:
+                wt_codes.append(code)
+            else:
+                raise HTTPException(status_code=400, detail=f"Invalid workplace type: {workplace_type}")
+    
+    # Run scraper in background with filters
+    background_tasks.add_task(run_scraper_task, job_id, keywords, request.max_shards, time_filter, 
+                             exp_codes, jt_codes, wt_codes)
     
     return {
         "job_id": job_id,
@@ -358,7 +401,8 @@ def get_workplace_type_label(code: str) -> str:
     wt_labels = {"1": "on_site", "2": "remote", "3": "hybrid"}
     return wt_labels.get(code, "unknown")
 
-async def run_scraper_task(job_id: str, keywords: str, max_shards: int, time_filter: str):
+async def run_scraper_task(job_id: str, keywords: str, max_shards: int, time_filter: str, 
+                          exp_codes: list = None, jt_codes: list = None, wt_codes: list = None):
     """Background task to run the scraper"""
     try:
         active_jobs[job_id]["status"] = "running"
@@ -367,6 +411,9 @@ async def run_scraper_task(job_id: str, keywords: str, max_shards: int, time_fil
         print(f"📊 Keywords: {keywords}")
         print(f"📊 Max shards: {max_shards}")
         print(f"📊 Time filter: {time_filter}")
+        print(f"📊 Experience codes: {exp_codes}")
+        print(f"📊 Job type codes: {jt_codes}")
+        print(f"📊 Workplace type codes: {wt_codes}")
         
         # Test import first
         try:
@@ -376,13 +423,16 @@ async def run_scraper_task(job_id: str, keywords: str, max_shards: int, time_fil
             print(f"❌ Import failed: {import_error}")
             raise
         
-        # Run the scraper
+        # Run the scraper with filters
         print("🔄 Starting scraper...")
         all_jobs, shard_results, shard_mappings = scrape_all_shards_api_only(
             keywords=keywords,
             max_shards=max_shards,
             resume=False,
-            time_filter=time_filter
+            time_filter=time_filter,
+            exp_codes=exp_codes,
+            jt_codes=jt_codes,
+            wt_codes=wt_codes
         )
         
         print(f"✅ Scraping completed: {len(all_jobs)} jobs found")

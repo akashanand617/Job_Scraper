@@ -448,7 +448,8 @@ def load_progress():
     except FileNotFoundError:
         return [], {}, {}, set()
 
-def scrape_all_shards_api_only(keywords, max_shards=None, resume=False, time_filter='r604800'):
+def scrape_all_shards_api_only(keywords, max_shards=None, resume=False, time_filter='r604800', 
+                              exp_codes=EXP_CODES, jt_codes=JT_CODES, wt_codes=WT_CODES):
     """Scrape all shard combinations using API only"""
     print("🚀 Starting LinkedIn Scraper (API-Only)")
     
@@ -478,6 +479,28 @@ def scrape_all_shards_api_only(keywords, max_shards=None, resume=False, time_fil
     
     # Generate prioritized shard combinations
     shard_combinations = generate_prioritized_shards(priority_shards)
+    
+    # Apply parameter filters
+    print(f"🔍 Using parameter filters:")
+    print(f"   - Experience codes: {exp_codes}")
+    print(f"   - Job type codes: {jt_codes}")
+    print(f"   - Workplace type codes: {wt_codes}")
+    
+    # Filter shard combinations
+    filtered_combinations = []
+    for exp_level, jt_type, wt_type in shard_combinations:
+        # Check if this combination matches our filters
+        if exp_level not in exp_codes:
+            continue
+        if jt_type not in jt_codes:
+            continue
+        if wt_type not in wt_codes:
+            continue
+        
+        filtered_combinations.append((exp_level, jt_type, wt_type))
+    
+    shard_combinations = filtered_combinations
+    print(f"   ✅ Filtered to {len(shard_combinations)} relevant shards")
     
     # Initialize tracking with efficient data structures
     seen_job_ids = {job['job_id'] for job in all_jobs}  # Efficient deduplication set
