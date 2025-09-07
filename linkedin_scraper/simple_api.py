@@ -21,6 +21,7 @@ import sys
 sys.path.append('src')
 from linkedin_scraper import scrape_all_shards_api_only
 
+
 # Create FastAPI app
 app = FastAPI(
     title="LinkedIn Job Scraper API",
@@ -37,6 +38,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 # Simple request models
 class ScrapeRequest(BaseModel):
     keywords: Optional[str] = None
@@ -48,6 +50,7 @@ class FilterRequest(BaseModel):
     job_type: Optional[str] = None  # internship, full_time, contract, temporary, part_time, volunteer, other
     workplace_type: Optional[str] = None  # remote, on_site, hybrid
     limit: Optional[int] = 50
+
 
 # Store active jobs
 active_jobs: Dict[str, Dict] = {}
@@ -304,6 +307,7 @@ async def run_scraper_task(job_id: str, keywords: str, max_shards: int, time_fil
         active_jobs[job_id]["status"] = "failed"
         active_jobs[job_id]["message"] = f"Scraping failed: {str(e)}"
         active_jobs[job_id]["completed_at"] = datetime.now().isoformat()
+
 
 if __name__ == "__main__":
     print("🚀 Starting LinkedIn Scraper API")
