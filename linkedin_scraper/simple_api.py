@@ -82,6 +82,34 @@ async def health_check():
     """Health check"""
     return {"status": "healthy", "timestamp": datetime.now().isoformat()}
 
+@app.get("/test-scraper")
+async def test_scraper():
+    """Test if scraper can be imported and basic functions work"""
+    try:
+        # Test import
+        from src.linkedin_scraper import scrape_all_shards_api_only
+        print("✅ Scraper import successful")
+        
+        # Test environment variables
+        import os
+        email = os.getenv('LINKEDIN_EMAIL')
+        password = os.getenv('LINKEDIN_PASSWORD')
+        
+        return {
+            "status": "success",
+            "scraper_import": "✅ Working",
+            "linkedin_email": "✅ Set" if email else "❌ Missing",
+            "linkedin_password": "✅ Set" if password else "❌ Missing",
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        print(f"❌ Scraper test failed: {e}")
+        return {
+            "status": "error",
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }
+
 @app.get("/scrape-now")
 @app.head("/scrape-now")
 async def scrape_now(background_tasks: BackgroundTasks):
@@ -317,8 +345,20 @@ async def run_scraper_task(job_id: str, keywords: str, max_shards: int, time_fil
         active_jobs[job_id]["status"] = "running"
         active_jobs[job_id]["message"] = "Scraping jobs..."
         print(f"🚀 Starting scraping task {job_id}")
+        print(f"📊 Keywords: {keywords}")
+        print(f"📊 Max shards: {max_shards}")
+        print(f"📊 Time filter: {time_filter}")
+        
+        # Test import first
+        try:
+            from src.linkedin_scraper import scrape_all_shards_api_only
+            print("✅ Scraper import successful")
+        except Exception as import_error:
+            print(f"❌ Import failed: {import_error}")
+            raise
         
         # Run the scraper
+        print("🔄 Starting scraper...")
         all_jobs, shard_results, shard_mappings = scrape_all_shards_api_only(
             keywords=keywords,
             max_shards=max_shards,
@@ -344,6 +384,8 @@ async def run_scraper_task(job_id: str, keywords: str, max_shards: int, time_fil
         
     except Exception as e:
         print(f"❌ Scraping failed: {str(e)}")
+        import traceback
+        print(f"❌ Full error: {traceback.format_exc()}")
         active_jobs[job_id]["status"] = "failed"
         active_jobs[job_id]["message"] = f"Scraping failed: {str(e)}"
         active_jobs[job_id]["completed_at"] = datetime.now().isoformat()
