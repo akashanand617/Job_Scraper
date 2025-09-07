@@ -1,149 +1,224 @@
 # LinkedIn Job Scraper
 
-A powerful, optimized LinkedIn job scraper that uses API-first approach with intelligent DOM fallback for maximum job coverage.
+A simple, efficient LinkedIn job scraper with data analysis tools.
 
-## 🚀 Features
+## Quick Start
 
-- **API-First Approach**: Uses LinkedIn's internal APIs for fast, reliable data extraction
-- **Smart DOM Fallback**: Intelligent fallback to DOM parsing when API fails
-- **Shard-Based Scraping**: Processes all combinations of experience levels, job types, and workplace types
-- **Early Empty Page Detection**: Quickly identifies pages with no jobs to avoid timeouts
-- **Strategic Rate Limiting**: Intelligent delays to prevent blocking
-- **Complete Data Extraction**: Job titles, company names, posting dates, repost detection, direct apply URLs
-- **Shard Analytics**: Tracks which combinations yield the most jobs
-- **Blacklist Filtering**: Automatically filters out job aggregators and staffing agencies
-
-## 📁 File Structure
-
-```
-scraper/
-├── linkedin_scraper.py      # Main optimized scraper
-├── login.py                 # LinkedIn login and cookie management
-├── requirements.txt         # Python dependencies
-├── README.md               # This file
-├── .gitignore              # Git ignore rules
-├── li_cookies.pkl          # Saved LinkedIn cookies (generated)
-├── linkedin_jobs.json      # Scraped job data (generated)
-├── shard_results.json      # Shard performance analytics (generated)
-└── shard_mappings.json     # Job-to-shard mapping data (generated)
-```
-
-## 🛠️ Setup
-
-1. **Install dependencies**:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-2. **Login to LinkedIn**:
-   ```bash
-   python login.py
-   ```
-   This will open a browser window for you to log in to LinkedIn and save your session cookies.
-
-## 🎯 Usage
-
-### Basic Usage
 ```bash
-python linkedin_scraper.py
+# Install dependencies
+pip install -r requirements.txt
+
+# Run the scraper
+python src/linkedin_scraper.py
+
+# Search the data
+python scripts/simple_search.py
 ```
 
-### Configuration
-Edit the `main()` function in `linkedin_scraper.py` to customize:
+## Project Structure
 
-- **Keywords**: Modify the `keywords` variable for different job searches
-- **Shard Limit**: Change `max_shards=5` to control how many shard combinations to process
-- **Experience Levels**: Modify `EXP_CODES` for different experience requirements
-- **Job Types**: Modify `JT_CODES` for different job types
-- **Workplace Types**: Modify `WT_CODES` for different workplace arrangements
+```
+linkedin_scraper/
+├── linkedin_final.py       # Main pipeline orchestrator
+├── src/                    # Core scraper source code
+│   ├── linkedin_scraper.py # Main scraper script
+│   └── login.py            # LinkedIn login functionality
+├── scripts/                # Utility and automation scripts
+│   ├── migrate_to_db.py    # Database migration script
+│   ├── setup_database.py   # Database setup helper
+│   ├── simple_search.py    # Interactive job search tool
+│   ├── analyze_posting_patterns.py  # Analyze job posting patterns
+│   └── run_pipeline.py     # Pipeline runner
+├── data/                   # Data files and outputs
+│   ├── linkedin_jobs_simplified.json  # Scraped job data
+│   ├── scraping_progress.json   # Resume data for interrupted runs
+│   └── li_cookies.pkl      # LinkedIn session cookies
+├── database/               # Database-related files
+│   └── database_schema.sql # PostgreSQL database schema
+├── docs/                   # Documentation
+│   ├── DATABASE_SETUP_GUIDE.md # Database setup instructions
+│   ├── CRON_SETUP.md      # Automation setup guide
+│   └── hybrid_cron_setup.md   # Hybrid scraping strategy guide
+├── requirements.txt        # Python dependencies
+├── .gitignore             # Git ignore rules
+└── README.md              # This file
+```
 
-## 📊 Output Files
+## Files
 
-### `linkedin_jobs.json`
-Contains all scraped job data with fields:
-- `job_id`: LinkedIn job ID
-- `title`: Job title
-- `company_name`: Company name (extracted from URL path)
-- `posted_dt`: ISO formatted posting date
-- `is_repost`: Boolean indicating if job is a repost
-- `url`: Direct apply URL (prefers company apply URL when available)
-- `source`: Data source ('api' or 'dom')
+### Core Files
+- `src/linkedin_scraper.py` - Main scraper with optimizations
+- `data/linkedin_jobs_simplified.json` - Jobs with shard info included (3,534 jobs)
 
-### `shard_results.json`
-Shard performance analytics showing:
-- Job count per shard combination
-- Experience level, job type, and workplace type labels
-- Success rates for different combinations
+### Analysis Tools
+- `scripts/simple_search.py` - Interactive search tool
 
-### `shard_mappings.json`
-Maps each job to the shard(s) it was found in, useful for:
-- Understanding which combinations are most productive
-- Filtering jobs by specific criteria
-- Optimizing future scraping runs
+### Database Files
+- `database/database_schema.sql` - PostgreSQL schema definition
+- `scripts/migrate_to_db.py` - Data migration script
+- `scripts/setup_database.py` - Database setup script
 
-## 🔧 Technical Details
+### Documentation
+- `docs/DATABASE_SETUP_GUIDE.md` - Database setup instructions
 
-### Shard Combinations
-The scraper processes all combinations of:
-- **Experience Levels**: Intern, Entry, Associate, Mid-Senior, Director, Executive
-- **Job Types**: Internship, Full-time, Contract, Temporary, Part-time, Volunteer, Other
-- **Workplace Types**: Remote, On-site, Hybrid
+### Data Files
+- `data/li_cookies.pkl` - LinkedIn session cookies
 
-### API Endpoints Used
-- `voyagerJobsDashJobCards`: Get job IDs and basic info
-- `jobs/jobPostings/{job_id}`: Get detailed job information
+## Features
 
-### Optimization Features
-- **Early Empty Page Detection**: Uses WebDriverWait to quickly identify pages with no jobs
-- **Strategic Rate Limiting**: Longer breaks every 5 shards to prevent blocking
-- **Optimized Browser Options**: Disabled images, JavaScript, and other features for faster loading
-- **Smart Error Handling**: Graceful fallback from API to DOM parsing
+### Scraper Optimizations
+- **Concurrent Job Processing**: 3x faster with ThreadPoolExecutor
+- **Adaptive Rate Limiting**: Prevents blocking, optimizes speed
+- **Smart Shard Prioritization**: Orders shards by performance
+- **Memory-Efficient Deduplication**: Uses sets for O(1) duplicate detection
+- **Progress Tracking**: Resume interrupted scrapes
 
-## 📈 Performance
+### Simplified Data Structure
+Each job now includes all filter information directly:
+```json
+{
+  "job_id": "4287995271",
+  "title": "Software Engineer",
+  "company_name": "Google", 
+  "posted_dt": "2025-08-18T18:59:06+00:00",
+  "is_repost": true,
+  "url": "https://...",
+  "source": "api",
+  "shard_key": "4_F_2",
+  "exp_level": "4",     // Mid-Senior
+  "job_type": "F",      // Full-time  
+  "workplace_type": "2", // Remote
+  "filters": "mid-senior+full_time+remote"
+}
+```
 
-### Typical Results
-- **205+ unique jobs** from 5 shards (intern level)
-- **100% API success rate** for most shards
-- **0% false positives** for repost detection
-- **Complete company names** extracted from URL paths
-- **Direct apply URLs** when available
+## Usage
 
-### Most Productive Shards
-Based on testing:
-1. **Intern + Full-time + On-site**: ~100 jobs
-2. **Intern + Internship + On-site**: ~83 jobs
-3. **Intern + Internship + Hybrid**: ~11 jobs
+### Basic Scraping
+   ```bash
+# Full scrape
+python src/linkedin_scraper.py
 
-## 🔒 Privacy & Ethics
+# Limited scrape
+python src/linkedin_scraper.py --max-shards 5
 
-- Uses your own LinkedIn account session
-- Respects LinkedIn's rate limits
-- Only scrapes publicly available job data
-- Includes strategic delays to avoid overwhelming servers
-- Filters out job aggregators to focus on direct company postings
+# Resume interrupted scrape
+python src/linkedin_scraper.py --resume
 
-## 🚨 Important Notes
+# Run full pipeline
+python linkedin_final.py --mode daily
 
-- **Login Required**: You must be logged into LinkedIn for the scraper to work
-- **Rate Limiting**: The scraper includes built-in delays to prevent blocking
-- **Session Management**: Cookies are saved locally and reused across runs
-- **Data Quality**: API data is preferred over DOM data for accuracy
+# Skip login (use existing cookies)
+python linkedin_final.py --mode daily --skip-login
 
-## 🐛 Troubleshooting
+# Skip database migration
+python linkedin_final.py --mode daily --skip-migration
+```
 
-### Common Issues
-1. **"No saved cookies found"**: Run `python login.py` first
-2. **API timeouts**: Normal for some shards, DOM fallback will activate
-3. **Browser crashes**: Rare with optimized settings, scraper will continue
-4. **Empty results**: Some shard combinations may have no jobs
+### Searching Data
+   ```bash
+# Interactive search
+python scripts/simple_search.py
 
-### Debug Mode
-The scraper includes detailed logging to help identify issues:
-- API success/failure messages
-- DOM fallback activation
-- Job counts per shard
-- Rate limiting information
+# Quick searches
+python -c "
+import sys; sys.path.append('scripts')
+from simple_search import search_by_company, search_remote_jobs, display_jobs
+jobs = search_by_company('Google')
+display_jobs(jobs, 3)
+"
+```
 
-## 📝 License
+### Database Operations
+```bash
+# Setup database
+python scripts/setup_database.py
 
-This project is for educational and personal use. Please respect LinkedIn's terms of service and use responsibly. 
+# Migrate data to PostgreSQL
+python scripts/migrate_to_db.py
+
+# Run sample queries
+psql -d linkedin_jobs -f database/database_schema.sql
+```
+
+## Data Insights
+
+- **Total Jobs**: 3,534
+- **Companies**: 1,221
+- **Top Hiring**: Tap Growth Ai (350), Mindrift (250), Telus Digital AI (231)
+- **Remote Jobs**: 40% (1,423 jobs)
+- **Experience Levels**: Mid-Senior (57%), Entry (19%), Director (8%)
+- **Job Types**: Full-time (73%), Part-time (16%), Contract (7%)
+
+## Filter Codes
+
+### Experience Levels
+- `1` - Intern
+- `2` - Entry Level  
+- `3` - Associate
+- `4` - Mid-Senior
+- `5` - Director
+- `6` - Executive
+
+### Job Types  
+- `F` - Full-time
+- `P` - Part-time
+- `C` - Contract
+- `I` - Internship
+- `T` - Temporary
+- `V` - Volunteer
+- `O` - Other
+
+### Workplace Types
+- `1` - On-site
+- `2` - Remote
+- `3` - Hybrid
+
+## Simple Queries
+
+With the simplified structure, you can easily:
+
+```python
+# Get all remote jobs
+remote_jobs = [job for job in jobs if job['workplace_type'] == '2']
+
+# Get mid-senior full-time jobs
+mid_senior_fulltime = [job for job in jobs 
+                      if job['exp_level'] == '4' and job['job_type'] == 'F']
+
+# Get jobs from specific shard
+shard_jobs = [job for job in jobs if job['shard_key'] == '4_F_2']
+
+# Get jobs by company
+google_jobs = [job for job in jobs if 'google' in job['company_name'].lower()]
+```
+
+## Configuration
+
+Edit `src/linkedin_scraper.py` constants:
+```python
+CONCURRENT_WORKERS = 5      # Parallel job fetching
+MAX_PAGES_PER_SHARD = 40    # Pages per search
+BASE_DELAY = 2.0            # Rate limiting delay
+```
+
+## Requirements
+
+- Python 3.8+
+- Chrome browser
+- LinkedIn account (for cookies)
+
+## Troubleshooting
+
+**Scraper stops working**: Update LinkedIn cookies in `li_cookies.pkl`
+**Browser issues**: Update Chrome and chromedriver
+**Rate limiting**: Increase `BASE_DELAY` in scraper settings
+
+## Next Steps
+
+1. **Build a simple API** for job search
+2. **Add more job sites** (Indeed, Glassdoor)
+3. **Extract salary information** from job descriptions  
+4. **Parse location details** (city, state, country)
+
+The focus is on keeping things simple and maintainable rather than over-engineering. 
