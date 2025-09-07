@@ -53,9 +53,9 @@ class ScrapeRequest(BaseModel):
     keywords: Optional[str] = None
     max_shards: Optional[int] = 126  # Maximum: 6 exp × 7 job types × 3 workplace types
     mode: Optional[str] = "daily"  # daily or weekly
-    experience_levels: Optional[list] = None  # ["intern", "entry", "associate", "mid-senior", "director", "executive"]
-    job_types: Optional[list] = None  # ["internship", "full_time", "contract", "temporary", "part_time", "volunteer", "other"]
-    workplace_types: Optional[list] = None  # ["remote", "on_site", "hybrid"]
+    experience_level: Optional[str] = None  # intern, entry, associate, mid-senior, director, executive
+    job_type: Optional[str] = None  # internship, full_time, contract, temporary, part_time, volunteer, other
+    workplace_type: Optional[str] = None  # remote, on_site, hybrid
 
 class FilterRequest(BaseModel):
     experience_level: Optional[str] = None  # intern, entry, associate, mid-senior, director, executive
@@ -166,43 +166,31 @@ async def start_scrape(request: ScrapeRequest, background_tasks: BackgroundTasks
         "mode": request.mode,
         "keywords": keywords,
         "max_shards": request.max_shards,
-        "experience_levels": request.experience_levels,
-        "job_types": request.job_types,
-        "workplace_types": request.workplace_types,
+        "experience_level": request.experience_level,
+        "job_type": request.job_type,
+        "workplace_type": request.workplace_type,
         "started_at": datetime.now().isoformat(),
         "message": f"Starting {request.mode} scrape with filters..."
     }
     
     # Convert human-readable filters to parameter lists
     exp_codes = None
-    if request.experience_levels:
-        exp_codes = []
-        for level in request.experience_levels:
-            code = next((code for code, label in EXP_LABEL.items() if label == level), None)
-            if code:
-                exp_codes.append(code)
-            else:
-                raise HTTPException(status_code=400, detail=f"Invalid experience level: {level}")
+    if request.experience_level:
+        exp_codes = [code for code, label in EXP_LABEL.items() if label == request.experience_level]
+        if not exp_codes:
+            raise HTTPException(status_code=400, detail=f"Invalid experience level: {request.experience_level}")
     
     jt_codes = None
-    if request.job_types:
-        jt_codes = []
-        for job_type in request.job_types:
-            code = next((code for code, label in JT_LABEL.items() if label == job_type), None)
-            if code:
-                jt_codes.append(code)
-            else:
-                raise HTTPException(status_code=400, detail=f"Invalid job type: {job_type}")
+    if request.job_type:
+        jt_codes = [code for code, label in JT_LABEL.items() if label == request.job_type]
+        if not jt_codes:
+            raise HTTPException(status_code=400, detail=f"Invalid job type: {request.job_type}")
     
     wt_codes = None
-    if request.workplace_types:
-        wt_codes = []
-        for workplace_type in request.workplace_types:
-            code = next((code for code, label in WT_LABEL.items() if label == workplace_type), None)
-            if code:
-                wt_codes.append(code)
-            else:
-                raise HTTPException(status_code=400, detail=f"Invalid workplace type: {workplace_type}")
+    if request.workplace_type:
+        wt_codes = [code for code, label in WT_LABEL.items() if label == request.workplace_type]
+        if not wt_codes:
+            raise HTTPException(status_code=400, detail=f"Invalid workplace type: {request.workplace_type}")
     
     # Run scraper in background with filters
     background_tasks.add_task(run_scraper_task, job_id, keywords, request.max_shards, time_filter, 

@@ -30,16 +30,16 @@ JT_LABEL = {"I": "internship", "F": "full_time", "C": "contract", "T": "temporar
 WT_LABEL = {"1": "on_site", "2": "remote", "3": "hybrid"}
 
 # Performance configuration
-CONCURRENT_WORKERS = 10  # Number of concurrent job detail requests
-MAX_PAGES_PER_SHARD = 5  # Maximum pages to fetch per shard
-API_TIMEOUT = 15  # API request timeout in seconds
-JOB_DETAIL_TIMEOUT = 10  # Job detail request timeout in seconds
+CONCURRENT_WORKERS = 3  # Reduced from 10
+MAX_PAGES_PER_SHARD = 5  # Reduced from 5
+API_TIMEOUT = 30  # Increased from 15
+JOB_DETAIL_TIMEOUT = 20  # Increased from 10
 
 # Rate limiting configuration
-BASE_DELAY = 1.0  # Base delay between shards
-MIN_DELAY = 0.3   # Minimum delay
-MAX_DELAY = 5.0   # Maximum delay
-BREAK_INTERVAL = 10  # Take longer break every N shards
+BASE_DELAY = 2.0  # Increased from 1.0
+MIN_DELAY = 1.0   # Increased from 0.3
+MAX_DELAY = 8.0   # Increased from 5.0
+BREAK_INTERVAL = 5  # More frequent breaks (was 10)
 
 # Blacklist companies
 BLACKLIST_RE = re.compile(
