@@ -490,11 +490,11 @@ def scrape_all_shards_api_only(keywords, max_shards=None, resume=False, time_fil
     filtered_combinations = []
     for exp_level, jt_type, wt_type in shard_combinations:
         # Check if this combination matches our filters
-        if exp_level not in exp_codes:
+        if exp_codes and exp_level not in exp_codes:
             continue
-        if jt_type not in jt_codes:
+        if jt_codes and jt_type not in jt_codes:
             continue
-        if wt_type not in wt_codes:
+        if wt_codes and wt_type not in wt_codes:
             continue
         
         filtered_combinations.append((exp_level, jt_type, wt_type))
