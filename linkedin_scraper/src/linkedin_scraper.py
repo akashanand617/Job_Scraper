@@ -4,7 +4,6 @@ LinkedIn Job Scraper - API-Only Approach
 Uses LinkedIn's internal API for fast and reliable job scraping
 """
 
-import undetected_chromedriver as uc
 import pickle
 import time
 import json
@@ -17,6 +16,7 @@ from collections import defaultdict
 from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
+import os
 
 # Search parameters
 EXP_CODES = ["1", "2", "3", "4", "5", "6"]  # Intern to Executive
@@ -129,6 +129,29 @@ def setup_session():
     })
     
     print("✅ Session setup complete using existing cookies")
+    return session
+
+def setup_session_cloud():
+    """Cloud-friendly session setup that works without browser automation"""
+    print("🔧 Setting up cloud-friendly API session...")
+    
+    # Check if we're in a cloud environment
+    if os.getenv('RENDER') or os.getenv('RAILWAY_ENVIRONMENT') or os.getenv('HEROKU_APP_NAME'):
+        print("☁️  Detected cloud environment - using minimal session")
+    
+    # For cloud deployment, we'll use a minimal session
+    import requests
+    session = requests.Session()
+    
+    # Set basic headers for LinkedIn API
+    session.headers.update({
+        'Accept': 'application/vnd.linkedin.normalized+json+2.1',
+        'x-restli-protocol-version': '2.0.0',
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36'
+    })
+    
+    print("✅ Cloud session setup complete (limited functionality)")
+    print("ℹ️  Note: Full scraping requires valid LinkedIn cookies. Upload li_cookies.pkl for full functionality.")
     return session
 
 def get_job_details_concurrent(session, job_ids, max_workers=CONCURRENT_WORKERS):
@@ -444,6 +467,9 @@ def scrape_all_shards_api_only(keywords, max_shards=None, resume=False, time_fil
     
     # Setup API session only
     api_session = setup_session()
+    if not api_session:
+        print("⚠️  No cookies available, using cloud-friendly session (limited functionality)")
+        api_session = setup_session_cloud()
     
     # Initialize adaptive rate limiter
     rate_limiter = AdaptiveRateLimiter()
