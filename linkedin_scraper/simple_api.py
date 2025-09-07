@@ -39,10 +39,13 @@ app.add_middleware(
 )
 
 
+# Default keywords for your resume automation
+DEFAULT_KEYWORDS = "AI OR Machine Learning OR Data Science OR Generative AI OR LLM OR Large Language Model OR Prompt Engineering OR Foundation Model OR Transformer OR RAG OR Reinforcement Learning With Human Feedback OR RLHF"
+
 # Simple request models
 class ScrapeRequest(BaseModel):
     keywords: Optional[str] = None
-    max_shards: Optional[int] = 10
+    max_shards: Optional[int] = 126  # Maximum: 6 exp × 7 job types × 3 workplace types
     mode: str = "daily"  # daily or weekly
 
 class FilterRequest(BaseModel):
@@ -78,6 +81,36 @@ async def health_check():
     """Health check"""
     return {"status": "healthy", "timestamp": datetime.now().isoformat()}
 
+@app.get("/scrape-now")
+async def scrape_now(background_tasks: BackgroundTasks):
+    """Start scraping immediately with default keywords (no JSON needed)"""
+    job_id = str(uuid.uuid4())
+    
+    # Use default keywords and settings
+    keywords = DEFAULT_KEYWORDS
+    time_filter = 'r86400'  # daily
+    max_shards = 126  # Maximum: 6 exp × 7 job types × 3 workplace types
+    
+    # Store job info
+    active_jobs[job_id] = {
+        "status": "starting",
+        "mode": "daily",
+        "keywords": keywords,
+        "max_shards": max_shards,
+        "started_at": datetime.now().isoformat()
+    }
+    
+    # Start background task
+    background_tasks.add_task(run_scraper_task, job_id, keywords, max_shards, time_filter)
+    
+    return {
+        "message": "Scraping started with default keywords",
+        "job_id": job_id,
+        "keywords": keywords,
+        "max_shards": max_shards,
+        "status_url": f"/scrape/{job_id}"
+    }
+
 @app.post("/scrape")
 async def start_scrape(request: ScrapeRequest, background_tasks: BackgroundTasks):
     """Start a scraping job"""
@@ -86,8 +119,8 @@ async def start_scrape(request: ScrapeRequest, background_tasks: BackgroundTasks
     # Set time filter based on mode
     time_filter = 'r86400' if request.mode == "daily" else 'r604800'
     
-    # Default keywords if not provided
-    keywords = request.keywords or '%22AI%22%20OR%20%22Generative%20AI%22%20OR%20%22LLM%22%20OR%20%22Large%20Language%20Model%22%20OR%20%22Prompt%20Engineering%22%20OR%20%22Foundation%20Model%22%20OR%20%22Transformer%22%20OR%20%22RAG%22%20OR%20%22Reinforcement%20Learning%20With%20Human%20Feedback%22%20OR%20%22RLHF%22%20NOT%20Jobright.ai'
+    # Use provided keywords or default keywords
+    keywords = request.keywords or DEFAULT_KEYWORDS
     
     # Store job info
     active_jobs[job_id] = {
