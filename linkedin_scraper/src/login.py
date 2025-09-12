@@ -47,12 +47,6 @@ def login_and_save_cookies(email, password):
         options.add_argument('--remote-debugging-port=9222')
         options.add_argument('--window-size=1920,1080')
         options.add_argument('--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
-    else:
-        # Local macOS environment - use more conservative options
-        options.add_argument('--disable-blink-features=AutomationControlled')
-        options.add_argument('--disable-extensions')
-        options.add_argument('--no-first-run')
-        options.add_argument('--disable-default-apps')
     
     # Create driver with retry logic
     max_retries = 3

@@ -47,7 +47,8 @@ jobs:
         AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
       run: |
         cd linkedin_scraper
-        python3 refresh_cookies.py
+        # Try cookie refresh first (less likely to trigger 2FA)
+        python3 refresh_existing_cookies.py || python3 refresh_cookies.py
         
     - name: Notify on success
       if: success()
