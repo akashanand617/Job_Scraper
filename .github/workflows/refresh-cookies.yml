@@ -41,7 +41,10 @@ jobs:
       env:
         LINKEDIN_EMAIL: ${{ secrets.LINKEDIN_EMAIL }}
         LINKEDIN_PASSWORD: ${{ secrets.LINKEDIN_PASSWORD }}
-        JOBS_BUCKET: linkedin-job-scraper-dev-jobs
+        JOBS_BUCKET: ${{ secrets.JOBS_BUCKET }}
+        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
       run: |
         cd linkedin_scraper
         python3 refresh_cookies.py

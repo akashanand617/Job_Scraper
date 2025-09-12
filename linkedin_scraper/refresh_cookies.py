@@ -8,7 +8,11 @@ import os
 import boto3
 import json
 from datetime import datetime, timezone
+from dotenv import load_dotenv
 from src.login import login_and_save_cookies
+
+# Load environment variables from .env file
+load_dotenv()
 
 def main():
     print("🍪 LinkedIn Cookie Refresh")

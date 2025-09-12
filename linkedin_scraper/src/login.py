@@ -47,6 +47,12 @@ def login_and_save_cookies(email, password):
         options.add_argument('--remote-debugging-port=9222')
         options.add_argument('--window-size=1920,1080')
         options.add_argument('--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+    else:
+        # Local macOS environment - use more conservative options
+        options.add_argument('--disable-blink-features=AutomationControlled')
+        options.add_argument('--disable-extensions')
+        options.add_argument('--no-first-run')
+        options.add_argument('--disable-default-apps')
     
     # Create driver with retry logic
     max_retries = 3
@@ -65,14 +71,27 @@ def login_and_save_cookies(email, password):
         # Go to LinkedIn login
         driver.get('https://www.linkedin.com/login')
         
+        # Wait a bit to appear more human-like
+        time.sleep(2)
+        
         # Wait for login form and enter credentials
         email_field = WebDriverWait(driver, 10).until(
             EC.presence_of_element_located((By.ID, "username"))
         )
         password_field = driver.find_element(By.ID, "password")
         
-        email_field.send_keys(email)
-        password_field.send_keys(password)
+        # Type more human-like (with delays)
+        for char in email:
+            email_field.send_keys(char)
+            time.sleep(0.1)
+        
+        time.sleep(1)
+        
+        for char in password:
+            password_field.send_keys(char)
+            time.sleep(0.1)
+        
+        time.sleep(2)
         
         # Click login button
         login_button = driver.find_element(By.CSS_SELECTOR, "button[type='submit']")
