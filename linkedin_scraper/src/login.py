@@ -32,10 +32,11 @@ def login_and_save_cookies(email, password):
     options.add_argument('--disable-web-security')
     options.add_argument('--disable-features=VizDisplayCompositor')
     
-    # Check if we're in Docker (use Chromium)
-    if os.path.exists('/.dockerenv'):
+    # Check if we're in Docker or GitHub Actions (use Chromium)
+    if os.path.exists('/.dockerenv') or os.getenv('GITHUB_ACTIONS'):
         options.binary_location = '/usr/bin/chromium'
         options.add_argument('--remote-debugging-port=9222')
+        options.add_argument('--headless')  # Run headless in CI
     
     # Create driver
     driver = uc.Chrome(options=options)
