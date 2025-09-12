@@ -35,11 +35,31 @@ def login_and_save_cookies(email, password):
     # Check if we're in Docker or GitHub Actions (use Chromium)
     if os.path.exists('/.dockerenv') or os.getenv('GITHUB_ACTIONS'):
         options.binary_location = '/usr/bin/chromium'
+        options.add_argument('--headless')
+        options.add_argument('--disable-gpu')
+        options.add_argument('--no-sandbox')
+        options.add_argument('--disable-dev-shm-usage')
+        options.add_argument('--disable-extensions')
+        options.add_argument('--disable-plugins')
+        options.add_argument('--disable-images')
+        options.add_argument('--disable-web-security')
+        options.add_argument('--disable-features=VizDisplayCompositor')
         options.add_argument('--remote-debugging-port=9222')
-        options.add_argument('--headless')  # Run headless in CI
+        options.add_argument('--window-size=1920,1080')
+        options.add_argument('--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
     
-    # Create driver
-    driver = uc.Chrome(options=options)
+    # Create driver with retry logic
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            print(f"🔄 Attempt {attempt + 1}/{max_retries} to create browser...")
+            driver = uc.Chrome(options=options)
+            break
+        except Exception as e:
+            print(f"⚠️ Browser creation attempt {attempt + 1} failed: {e}")
+            if attempt == max_retries - 1:
+                raise
+            time.sleep(2)
     
     try:
         # Go to LinkedIn login
@@ -58,10 +78,23 @@ def login_and_save_cookies(email, password):
         login_button = driver.find_element(By.CSS_SELECTOR, "button[type='submit']")
         login_button.click()
         
-        # Wait for successful login
-        WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, "input[placeholder*='Search']"))
-        )
+        # Wait for successful login (with multiple possible success indicators)
+        try:
+            WebDriverWait(driver, 15).until(
+                EC.any_of(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, "input[placeholder*='Search']")),
+                    EC.presence_of_element_located((By.CSS_SELECTOR, "[data-test-id='search-input']")),
+                    EC.presence_of_element_located((By.CSS_SELECTOR, ".global-nav__me")),
+                    EC.url_contains("linkedin.com/feed")
+                )
+            )
+        except Exception as e:
+            print(f"⚠️ Login verification failed: {e}")
+            # Check if we're on a 2FA page
+            if "challenge" in driver.current_url or "two-factor" in driver.current_url:
+                print("🔐 2FA detected - manual intervention may be required")
+                raise Exception("2FA challenge detected - cannot proceed automatically")
+            raise
         
         print("✅ Login successful!")
         
