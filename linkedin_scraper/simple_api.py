@@ -19,8 +19,6 @@ from pydantic import BaseModel
 # Import your existing scraper
 import sys
 sys.path.append('src')
-import linkedin_scraper
-from linkedin_scraper import scrape_all_shards_api_only
 
 
 # Create FastAPI app
@@ -48,7 +46,7 @@ EXP_LABEL = {"1": "intern", "2": "entry", "3": "associate", "4": "mid-senior", "
 JT_LABEL = {"I": "internship", "F": "full_time", "C": "contract", "T": "temporary", "P": "part_time", "V": "volunteer", "O": "other"}
 WT_LABEL = {"1": "on_site", "2": "remote", "3": "hybrid"}
 
-# Simple request models
+# Request models
 class ScrapeRequest(BaseModel):
     keywords: Optional[str] = None
     max_shards: Optional[int] = 126  # Maximum: 6 exp × 7 job types × 3 workplace types
@@ -56,6 +54,8 @@ class ScrapeRequest(BaseModel):
     experience_level: Optional[str] = None  # intern, entry, associate, mid-senior, director, executive
     job_type: Optional[str] = None  # internship, full_time, contract, temporary, part_time, volunteer, other
     workplace_type: Optional[str] = None  # remote, on_site, hybrid
+    batch_size: Optional[int] = 18  # For Lambda compatibility (7 batches of 18 shards each)
+    batch_number: Optional[int] = 1  # Which batch to process (1-7)
 
 class FilterRequest(BaseModel):
     experience_level: Optional[str] = None  # intern, entry, associate, mid-senior, director, executive
@@ -72,16 +72,27 @@ active_jobs: Dict[str, Dict] = {}
 async def root():
     """Root endpoint"""
     return {
-        "message": "LinkedIn Job Scraper API",
-        "version": "1.0.0",
+        "message": "LinkedIn Job Scraper API - Simplified",
+        "version": "2.0.0",
         "endpoints": {
-            "scrape": "POST /scrape",
+            "scrape": "GET /scrape (manual trigger) or POST /scrape (programmatic)",
             "status": "GET /scrape/{job_id}",
-            "jobs": "GET /jobs",
-            "latest": "GET /latest",
-            "filter": "POST /filter",
-            "filters": "GET /filters",
-            "health": "GET /health"
+            "analytics_jobs": "GET /analytics-jobs (all accumulated data)",
+            "latest": "GET /latest (all jobs from last 24 hours, sorted by date)",
+            "filter": "POST /filter (filter analytics data)",
+            "filters": "GET /filters (available filter options)",
+            "batch_info": "GET /batch-info",
+            "health": "GET /health",
+            "test": "GET /test-scraper"
+        },
+        "data_source": {
+            "analytics": "analytics_historical_jobs.json (accumulating hourly)"
+        },
+        "features": {
+            "hourly_scraping": "Automatically runs analytics every hour",
+            "data_accumulation": "Builds historical dataset over time",
+            "batch_processing": "Supports Lambda-compatible batch processing",
+            "filtering": "Filter by experience, job type, workplace type"
         }
     }
 
@@ -118,59 +129,64 @@ async def test_scraper():
             "timestamp": datetime.now().isoformat()
         }
 
-@app.get("/scrape-now")
-@app.head("/scrape-now")
-async def scrape_now(background_tasks: BackgroundTasks):
-    """Start scraping immediately with default keywords (no JSON needed)"""
-    job_id = str(uuid.uuid4())
+
+@app.get("/scrape")
+async def start_scrape_manual(
+    keywords: Optional[str] = None,
+    max_shards: Optional[int] = 126,
+    mode: Optional[str] = "daily",
+    experience_level: Optional[str] = None,
+    job_type: Optional[str] = None,
+    workplace_type: Optional[str] = None,
+    batch_size: Optional[int] = 18,
+    batch_number: Optional[int] = 1,
+    background_tasks: BackgroundTasks = BackgroundTasks()
+):
+    """Manual scraping trigger via GET request"""
+    # Create a ScrapeRequest object from query parameters
+    request = ScrapeRequest(
+        keywords=keywords,
+        max_shards=max_shards,
+        mode=mode,
+        experience_level=experience_level,
+        job_type=job_type,
+        workplace_type=workplace_type,
+        batch_size=batch_size,
+        batch_number=batch_number
+    )
     
-    # Use default keywords and settings
-    keywords = DEFAULT_KEYWORDS
-    time_filter = 'r86400'  # daily
-    max_shards = 126  # Maximum: 6 exp × 7 job types × 3 workplace types
-    
-    # Store job info
-    active_jobs[job_id] = {
-        "status": "starting",
-        "mode": "daily",
-        "keywords": keywords,
-        "max_shards": max_shards,
-        "started_at": datetime.now().isoformat()
-    }
-    
-    # Start background task (no filters - use all parameters)
-    background_tasks.add_task(run_scraper_task, job_id, keywords, max_shards, time_filter, None, None, None)
-    
-    return {
-        "message": "Scraping started with default keywords",
-        "job_id": job_id,
-        "keywords": keywords,
-        "max_shards": max_shards,
-        "status_url": f"/scrape/{job_id}"
-    }
+    # Use the existing POST logic
+    return await start_scrape(request, background_tasks)
 
 @app.post("/scrape")
 async def start_scrape(request: ScrapeRequest, background_tasks: BackgroundTasks):
-    """Start a scraping job"""
+    """Start a scraping job - runs analytics and accumulates data hourly"""
     job_id = str(uuid.uuid4())
     
     # Set time filter based on mode
-    time_filter = 'r86400' if request.mode == "daily" else 'r604800'
+    time_filter = 'r3600' if request.mode == "daily" else 'r604800'
     
     # Use provided keywords or default keywords
     keywords = request.keywords or DEFAULT_KEYWORDS
     
-    # Store job info with filters
+    # Use analytics data file for accumulating data
+    jobs_file = '/tmp/analytics_historical_jobs.json'
+    
+    # Store job info with filters and batch info
     active_jobs[job_id] = {
         "status": "starting",
-        "mode": request.mode,
+        "mode": "analytics",  # Always run as analytics to accumulate data
         "keywords": keywords,
         "max_shards": request.max_shards,
         "experience_level": request.experience_level,
         "job_type": request.job_type,
         "workplace_type": request.workplace_type,
+        "batch_size": request.batch_size,
+        "batch_number": request.batch_number,
+        "data_file": jobs_file,
+        "retention": "accumulating",
         "started_at": datetime.now().isoformat(),
-        "message": f"Starting {request.mode} scrape with filters..."
+        "message": f"Starting analytics scrape (batch {request.batch_number}) - accumulating data..."
     }
     
     # Convert human-readable filters to parameter lists
@@ -192,14 +208,27 @@ async def start_scrape(request: ScrapeRequest, background_tasks: BackgroundTasks
         if not wt_codes:
             raise HTTPException(status_code=400, detail=f"Invalid workplace type: {request.workplace_type}")
     
-    # Run scraper in background with filters
-    background_tasks.add_task(run_scraper_task, job_id, keywords, request.max_shards, time_filter, 
-                             exp_codes, jt_codes, wt_codes)
+    # Run analytics scraper in background with filters and batch info
+    background_tasks.add_task(
+        run_analytics_task, 
+        job_id, 
+        keywords,
+        request.max_shards, 
+        time_filter,
+        exp_codes, 
+        jt_codes, 
+        wt_codes,
+        request.batch_size,
+        request.batch_number,
+        jobs_file
+    )
     
     return {
         "job_id": job_id,
         "status": "starting",
-        "message": f"{request.mode.capitalize()} scrape initiated",
+        "message": "Analytics scrape initiated (accumulating data hourly)",
+        "data_file": jobs_file,
+        "retention": "accumulating",
         "timestamp": datetime.now().isoformat()
     }
 
@@ -219,22 +248,104 @@ async def get_scrape_status(job_id: str):
         "results": job.get("results")
     }
 
-@app.get("/jobs")
-async def list_jobs():
-    """List all scraped LinkedIn jobs"""
+async def run_analytics_task(job_id: str, keywords: str, max_shards: int, time_filter: str,
+                           exp_codes: list = None, jt_codes: list = None, wt_codes: list = None,
+                           batch_size: int = 18, batch_number: int = 1, jobs_file: str = None):
+    """Background task for analytics scraping"""
     try:
-        if not os.path.exists('data/linkedin_jobs_simplified.json'):
-            return {"total_jobs": 0, "jobs": []}
+        # Ensure job entry exists (scheduled invocations may not pre-register)
+        if job_id not in active_jobs:
+            active_jobs[job_id] = {
+                "status": "queued",
+                "message": "Scheduled analytics run",
+                "started_at": datetime.now().isoformat(),
+            }
+        active_jobs[job_id]["status"] = "running"
+        active_jobs[job_id]["message"] = "Running analytics scrape..."
+        print(f"🚀 Starting analytics task {job_id}")
+        print(f"📊 Data file: {jobs_file}")
+        print(f"📊 Retention: accumulating")
         
-        with open('data/linkedin_jobs_simplified.json', 'r') as f:
+        # Test import first
+        try:
+            from src.linkedin_scraper import scrape_all_shards_api_only
+            print("✅ Scraper import successful")
+        except Exception as import_error:
+            print(f"❌ Import failed: {import_error}")
+            raise
+        
+        # Run the scraper with filters and batch processing
+        print("🔄 Starting analytics scraper...")
+        all_jobs, shard_results, shard_mappings = scrape_all_shards_api_only(
+            keywords=keywords,
+            max_shards=max_shards,
+            resume=False,
+            time_filter=time_filter,
+            exp_codes=exp_codes,
+            jt_codes=jt_codes,
+            wt_codes=wt_codes,
+            batch_size=batch_size,
+            batch_number=batch_number
+        )
+        
+        print(f"✅ Analytics scraping completed: {len(all_jobs)} jobs found")
+        
+        # Load existing analytics data
+        existing_jobs = []
+        if os.path.exists(jobs_file):
+            with open(jobs_file, 'r') as f:
+                existing_jobs = json.load(f)
+        
+        # Merge new jobs with existing (avoid duplicates)
+        existing_job_ids = {job.get('job_id') for job in existing_jobs}
+        new_jobs = [job for job in all_jobs if job.get('job_id') not in existing_job_ids]
+        
+        # Combine and save
+        combined_jobs = existing_jobs + new_jobs
+        with open(jobs_file, 'w') as f:
+            json.dump(combined_jobs, f, indent=2, default=str)
+        
+        print(f"📊 Analytics data updated: {len(new_jobs)} new jobs, {len(combined_jobs)} total")
+        
+        # Update job status
+        active_jobs[job_id]["status"] = "completed"
+        active_jobs[job_id]["message"] = f"Analytics scrape completed: {len(new_jobs)} new jobs added"
+        active_jobs[job_id]["completed_at"] = datetime.now().isoformat()
+        active_jobs[job_id]["results"] = {
+            "new_jobs": len(new_jobs),
+            "total_jobs": len(combined_jobs),
+            "shards_processed": len(shard_results),
+            "batch_number": batch_number,
+            "batch_size": batch_size,
+            "data_file": jobs_file
+        }
+        
+    except Exception as e:
+        print(f"❌ Analytics scraping failed: {str(e)}")
+        import traceback
+        print(f"❌ Full error: {traceback.format_exc()}")
+        active_jobs[job_id]["status"] = "failed"
+        active_jobs[job_id]["message"] = f"Analytics scraping failed: {str(e)}"
+        active_jobs[job_id]["completed_at"] = datetime.now().isoformat()
+
+@app.get("/analytics-jobs")
+async def list_analytics_jobs():
+    """List all analytics LinkedIn jobs (accumulating)"""
+    try:
+        if not os.path.exists('/tmp/analytics_historical_jobs.json'):
+            return {"total_jobs": 0, "jobs": [], "retention": "accumulating"}
+        
+        with open('/tmp/analytics_historical_jobs.json', 'r') as f:
             all_jobs = json.load(f)
         
         return {
             "total_jobs": len(all_jobs),
-            "jobs": all_jobs
+            "jobs": all_jobs,
+            "retention": "accumulating",
+            "data_file": "analytics_historical_jobs.json"
         }
     except Exception as e:
-        return {"error": f"Error reading jobs: {str(e)}", "total_jobs": 0, "jobs": []}
+        return {"error": f"Error reading analytics jobs: {str(e)}", "total_jobs": 0, "jobs": []}
 
 @app.get("/scrape-jobs")
 async def list_scrape_jobs():
@@ -256,30 +367,106 @@ async def list_scrape_jobs():
 
 @app.get("/latest")
 async def get_latest_jobs():
-    """Get the latest scraped jobs"""
+    """Get all jobs from the last 24 hours from S3 batch files, sorted by date"""
     try:
-        if os.path.exists('data/linkedin_jobs_simplified.json'):
-            with open('data/linkedin_jobs_simplified.json', 'r') as f:
-                jobs = json.load(f)
+        # Try to read from S3 batch files first
+        all_jobs = []
+        try:
+            import boto3
+            from datetime import datetime, timezone, timedelta
             
-            return {
-                "total_jobs": len(jobs),
-                "latest_jobs": jobs[:10],  # Return first 10 jobs
-                "timestamp": datetime.now().isoformat()
-            }
-        else:
-            return {"message": "No jobs found", "total_jobs": 0}
+            s3_client = boto3.client('s3')
+            bucket_name = os.getenv('JOBS_BUCKET', 'linkedin-job-scraper-dev-jobs')
+            
+            # Get today's date for the S3 path
+            today = datetime.now(timezone.utc).date()
+            prefix = f"jobs/hourly/{today}/"
+            
+            # List all batch files for today
+            response = s3_client.list_objects_v2(Bucket=bucket_name, Prefix=prefix)
+            
+            if 'Contents' in response:
+                for obj in response['Contents']:
+                    if obj['Key'].endswith('.json'):
+                        # Download and parse each batch file
+                        file_obj = s3_client.get_object(Bucket=bucket_name, Key=obj['Key'])
+                        batch_jobs = json.loads(file_obj['Body'].read().decode('utf-8'))
+                        if isinstance(batch_jobs, list):
+                            all_jobs.extend(batch_jobs)
+                        else:
+                            all_jobs.append(batch_jobs)
+            
+            # Remove duplicates based on job_id
+            seen_ids = set()
+            unique_jobs = []
+            for job in all_jobs:
+                job_id = job.get('job_id') or job.get('id')
+                if job_id and job_id not in seen_ids:
+                    seen_ids.add(job_id)
+                    unique_jobs.append(job)
+            all_jobs = unique_jobs
+            
+        except Exception as s3_error:
+            print(f"⚠️ S3 consolidation failed: {s3_error}")
+            # Fallback to local analytics file
+            analytics_file = '/tmp/analytics_historical_jobs.json'
+            if not os.path.exists(analytics_file):
+                return {"message": "No analytics data found", "total_jobs": 0, "last_24h_jobs": 0, "latest_jobs": []}
+            
+            with open(analytics_file, 'r') as f:
+                all_jobs = json.load(f)
+        
+        # Filter to last 24 hours
+        from datetime import timedelta, timezone
+        cutoff_time = datetime.now(timezone.utc) - timedelta(hours=24)
+        last_24h_jobs = []
+        
+        for job in all_jobs:
+            # Check if job was posted in the last 24 hours
+            job_datetime = None
+            if 'posted_dt' in job and job['posted_dt']:
+                try:
+                    # Parse the ISO format datetime
+                    job_datetime = datetime.fromisoformat(job['posted_dt'].replace('Z', '+00:00'))
+                except (ValueError, TypeError):
+                    # Try alternative date fields if posted_dt fails
+                    for date_field in ['listedAt', 'created_at_formatted']:
+                        if date_field in job and job[date_field]:
+                            try:
+                                job_datetime = datetime.fromisoformat(job[date_field].replace('Z', '+00:00'))
+                                break
+                            except (ValueError, TypeError):
+                                continue
+            
+            if job_datetime and job_datetime >= cutoff_time:
+                last_24h_jobs.append(job)
+        
+        # Sort jobs by posted date (most recent first)
+        last_24h_jobs_sorted = sorted(last_24h_jobs, key=lambda x: x.get('posted_dt', ''), reverse=True)
+        
+        return {
+            "total_jobs": len(all_jobs),
+            "last_24h_jobs": len(last_24h_jobs_sorted),
+            "latest_jobs": last_24h_jobs_sorted,
+            "data_source": "s3_batch_files" if 's3_client' in locals() else "analytics_historical_jobs.json",
+            "retention": "accumulating",
+            "time_filter": "last_24_hours",
+            "cutoff_time": cutoff_time.isoformat(),
+            "timestamp": datetime.now().isoformat()
+        }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error reading jobs: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error reading analytics jobs: {str(e)}")
 
 @app.post("/filter")
 async def filter_jobs(request: FilterRequest):
-    """Filter jobs by experience level, job type, workplace type"""
+    """Filter jobs by experience level, job type, workplace type from analytics data"""
     try:
-        if not os.path.exists('data/linkedin_jobs_simplified.json'):
-            return {"message": "No jobs found", "total_jobs": 0, "filtered_jobs": []}
+        # Read from analytics data file
+        analytics_file = '/tmp/analytics_historical_jobs.json'
+        if not os.path.exists(analytics_file):
+            return {"message": "No analytics data found", "total_jobs": 0, "filtered_jobs": []}
         
-        with open('data/linkedin_jobs_simplified.json', 'r') as f:
+        with open(analytics_file, 'r') as f:
             all_jobs = json.load(f)
         
         # Filter jobs based on request parameters
@@ -323,14 +510,37 @@ async def filter_jobs(request: FilterRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error filtering jobs: {str(e)}")
 
+@app.get("/batch-info")
+async def get_batch_info():
+    """Get information about batch processing for Lambda compatibility"""
+    return {
+        "total_shards": 126,
+        "recommended_batch_size": 18,
+        "total_batches": 7,
+        "batch_info": {
+            "batch_1": "Shards 1-18",
+            "batch_2": "Shards 19-36", 
+            "batch_3": "Shards 37-54",
+            "batch_4": "Shards 55-72",
+            "batch_5": "Shards 73-90",
+            "batch_6": "Shards 91-108",
+            "batch_7": "Shards 109-126"
+        },
+        "lambda_timeout": "15 minutes",
+        "estimated_time_per_batch": "3-5 minutes",
+        "usage": "Use batch_number (1-7) and batch_size (18) in POST /scrape"
+    }
+
 @app.get("/filters")
 async def get_available_filters():
-    """Get available filter options and current job distribution"""
+    """Get available filter options and current job distribution from analytics data"""
     try:
-        if not os.path.exists('data/linkedin_jobs_simplified.json'):
-            return {"message": "No jobs found", "filters": {}}
+        # Read from analytics data file
+        analytics_file = '/tmp/analytics_historical_jobs.json'
+        if not os.path.exists(analytics_file):
+            return {"message": "No analytics data found", "filters": {}}
         
-        with open('data/linkedin_jobs_simplified.json', 'r') as f:
+        with open(analytics_file, 'r') as f:
             jobs = json.load(f)
         
         # Count jobs by each filter category
@@ -389,63 +599,6 @@ def get_workplace_type_label(code: str) -> str:
     wt_labels = {"1": "on_site", "2": "remote", "3": "hybrid"}
     return wt_labels.get(code, "unknown")
 
-async def run_scraper_task(job_id: str, keywords: str, max_shards: int, time_filter: str, 
-                          exp_codes: list = None, jt_codes: list = None, wt_codes: list = None):
-    """Background task to run the scraper"""
-    try:
-        active_jobs[job_id]["status"] = "running"
-        active_jobs[job_id]["message"] = "Scraping jobs..."
-        print(f"🚀 Starting scraping task {job_id}")
-        print(f"📊 Keywords: {keywords}")
-        print(f"📊 Max shards: {max_shards}")
-        print(f"📊 Time filter: {time_filter}")
-        print(f"📊 Experience codes: {exp_codes}")
-        print(f"📊 Job type codes: {jt_codes}")
-        print(f"📊 Workplace type codes: {wt_codes}")
-        
-        # Test import first
-        try:
-            from src.linkedin_scraper import scrape_all_shards_api_only
-            print("✅ Scraper import successful")
-        except Exception as import_error:
-            print(f"❌ Import failed: {import_error}")
-            raise
-        
-        # Run the scraper with filters
-        print("🔄 Starting scraper...")
-        all_jobs, shard_results, shard_mappings = scrape_all_shards_api_only(
-            keywords=keywords,
-            max_shards=max_shards,
-            resume=False,
-            time_filter=time_filter,
-            exp_codes=exp_codes,
-            jt_codes=jt_codes,
-            wt_codes=wt_codes
-        )
-        
-        print(f"✅ Scraping completed: {len(all_jobs)} jobs found")
-        
-        # Save results
-        with open('data/linkedin_jobs_simplified.json', 'w') as f:
-            json.dump(all_jobs, f, indent=2, default=str)
-        
-        # Update job status
-        active_jobs[job_id]["status"] = "completed"
-        active_jobs[job_id]["message"] = f"Scraping completed: {len(all_jobs)} jobs found"
-        active_jobs[job_id]["completed_at"] = datetime.now().isoformat()
-        active_jobs[job_id]["results"] = {
-            "total_jobs": len(all_jobs),
-            "shards_processed": len(shard_results),
-            "file_saved": "data/linkedin_jobs_simplified.json"
-        }
-        
-    except Exception as e:
-        print(f"❌ Scraping failed: {str(e)}")
-        import traceback
-        print(f"❌ Full error: {traceback.format_exc()}")
-        active_jobs[job_id]["status"] = "failed"
-        active_jobs[job_id]["message"] = f"Scraping failed: {str(e)}"
-        active_jobs[job_id]["completed_at"] = datetime.now().isoformat()
 
 
 if __name__ == "__main__":

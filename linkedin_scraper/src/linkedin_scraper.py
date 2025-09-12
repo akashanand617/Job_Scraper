@@ -4,7 +4,6 @@ LinkedIn Job Scraper - API-Only Approach
 Uses LinkedIn's internal API for fast and reliable job scraping
 """
 
-import undetected_chromedriver as uc
 import pickle
 import time
 import json
@@ -89,11 +88,33 @@ class AdaptiveRateLimiter:
         return random.uniform(self.current_delay * 1.2, self.current_delay * 1.5)
 
 def load_cookies():
-    """Load saved cookies"""
+    """Load saved cookies from local file or S3"""
     try:
         with open('li_cookies.pkl', 'rb') as f:
             return pickle.load(f)
     except FileNotFoundError:
+        print("❌ No local cookies found. Checking S3...")
+        
+        # Try to download cookies from S3
+        try:
+            import boto3
+            import os
+            
+            bucket_name = os.getenv('JOBS_BUCKET', 'linkedin-job-scraper-dev-jobs')
+            if bucket_name:
+                s3_client = boto3.client('s3')
+                s3_key = "cookies/li_cookies.pkl"
+                
+                # Download cookies from S3
+                s3_client.download_file(bucket_name, s3_key, 'li_cookies.pkl')
+                print("✅ Cookies downloaded from S3")
+                
+                # Load the downloaded cookies
+                with open('li_cookies.pkl', 'rb') as f:
+                    return pickle.load(f)
+        except Exception as s3_error:
+            print(f"⚠️ S3 cookie download failed: {s3_error}")
+        
         print("❌ No saved cookies found. Please run login.py first.")
         return None
 
@@ -429,13 +450,13 @@ def save_progress(all_jobs, shard_results, shard_mappings, completed_shards):
         'timestamp': datetime.now().isoformat()
     }
     
-    with open('data/scraping_progress.json', 'w') as f:
+    with open('/tmp/scraping_progress.json', 'w') as f: #tmp is only writable by the lambda function
         json.dump(progress_data, f, indent=2, default=str)
 
 def load_progress():
     """Load progress from previous run"""
     try:
-        with open('data/scraping_progress.json', 'r') as f:
+        with open('/tmp/scraping_progress.json', 'r') as f:
             progress_data = json.load(f)
         
         # Convert job IDs back to strings if needed
@@ -449,7 +470,8 @@ def load_progress():
         return [], {}, {}, set()
 
 def scrape_all_shards_api_only(keywords, max_shards=None, resume=False, time_filter='r604800', 
-                              exp_codes=EXP_CODES, jt_codes=JT_CODES, wt_codes=WT_CODES):
+                              exp_codes=EXP_CODES, jt_codes=JT_CODES, wt_codes=WT_CODES,
+                              batch_size=18, batch_number=1):
     """Scrape all shard combinations using API only"""
     print("🚀 Starting LinkedIn Scraper (API-Only)")
     
@@ -501,6 +523,13 @@ def scrape_all_shards_api_only(keywords, max_shards=None, resume=False, time_fil
     
     shard_combinations = filtered_combinations
     print(f"   ✅ Filtered to {len(shard_combinations)} relevant shards")
+    
+    # Apply batch processing for Lambda compatibility
+    if batch_size and batch_number:
+        start_idx = (batch_number - 1) * batch_size
+        end_idx = start_idx + batch_size
+        shard_combinations = shard_combinations[start_idx:end_idx]
+        print(f"📦 Batch processing: batch {batch_number} (shards {start_idx+1}-{min(end_idx, len(filtered_combinations))})")
     
     # Initialize tracking with efficient data structures
     seen_job_ids = {job['job_id'] for job in all_jobs}  # Efficient deduplication set
@@ -649,8 +678,8 @@ def main():
     
     # Clear previous data files
     import os
-    json_file = 'data/linkedin_jobs_simplified.json'
-    progress_file = 'data/scraping_progress.json'
+    json_file = '/tmp/linkedin_jobs_simplified.json'
+    progress_file = '/tmp/scraping_progress.json'
     
     print("🗑️ Clearing previous data files...")
     if os.path.exists(json_file):
@@ -669,7 +698,7 @@ def main():
     )
     
     # Save results
-    with open('data/linkedin_jobs_simplified.json', 'w') as f:
+    with open('/tmp/linkedin_jobs_simplified.json', 'w') as f:
         json.dump(all_jobs, f, indent=2, default=str)
     
     # Note: shard_lookup.json was removed during cleanup
@@ -691,9 +720,9 @@ def main():
         print(f"   {i+1}. {data['labels']}: {data['job_count']} jobs")
     
     print(f"\n💾 Saved to:")
-    print(f"   - data/linkedin_jobs_simplified.json (jobs with shard info)")
+    print(f"   - /tmp/linkedin_jobs_simplified.json (jobs with shard info)")
     if args.resume:
-        print(f"   - data/scraping_progress.json (resume data)")
+        print(f"   - /tmp/scraping_progress.json (resume data)")
 
 if __name__ == "__main__":
     main() 

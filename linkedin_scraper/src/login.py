@@ -32,6 +32,11 @@ def login_and_save_cookies(email, password):
     options.add_argument('--disable-web-security')
     options.add_argument('--disable-features=VizDisplayCompositor')
     
+    # Check if we're in Docker (use Chromium)
+    if os.path.exists('/.dockerenv'):
+        options.binary_location = '/usr/bin/chromium'
+        options.add_argument('--remote-debugging-port=9222')
+    
     # Create driver
     driver = uc.Chrome(options=options)
     

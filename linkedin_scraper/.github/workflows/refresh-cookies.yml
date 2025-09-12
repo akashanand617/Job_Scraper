@@ -1,0 +1,73 @@
+name: Refresh LinkedIn Cookies
+
+on:
+  schedule:
+    # Run every Sunday at 9 AM UTC (adjust timezone as needed)
+    - cron: '0 9 * * 0'
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  refresh-cookies:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+        
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y wget gnupg unzip curl
+        
+    - name: Install Chrome
+      run: |
+        wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo gpg --dearmor -o /usr/share/keyrings/googlechrome-linux-keyring.gpg
+        echo "deb [arch=amd64 signed-by=/usr/share/keyrings/googlechrome-linux-keyring.gpg] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
+        sudo apt-get update
+        sudo apt-get install -y google-chrome-stable
+        
+    - name: Install ChromeDriver
+      run: |
+        CHROME_VERSION=$(google-chrome --version | awk '{print $3}' | cut -d. -f1-3)
+        CHROMEDRIVER_VERSION=$(curl -s "https://chromedriver.storage.googleapis.com/LATEST_RELEASE_${CHROME_VERSION}")
+        wget -O /tmp/chromedriver.zip "https://chromedriver.storage.googleapis.com/${CHROMEDRIVER_VERSION}/chromedriver_linux64.zip"
+        sudo unzip /tmp/chromedriver.zip -d /usr/local/bin/
+        sudo chmod +x /usr/local/bin/chromedriver
+        rm /tmp/chromedriver.zip
+        
+    - name: Install Python dependencies
+      run: |
+        pip install -r requirements.txt
+        pip install boto3
+        
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: us-east-1
+        
+    - name: Refresh LinkedIn cookies
+      env:
+        LINKEDIN_EMAIL: ${{ secrets.LINKEDIN_EMAIL }}
+        LINKEDIN_PASSWORD: ${{ secrets.LINKEDIN_PASSWORD }}
+        JOBS_BUCKET: linkedin-job-scraper-dev-jobs
+      run: |
+        python3 refresh_cookies.py
+        
+    - name: Notify on success
+      if: success()
+      run: |
+        echo "✅ LinkedIn cookies refreshed successfully!"
+        echo "Next refresh scheduled for next Sunday at 9 AM UTC."
+        
+    - name: Notify on failure
+      if: failure()
+      run: |
+        echo "❌ LinkedIn cookie refresh failed!"
+        echo "Please check the logs and refresh manually if needed."

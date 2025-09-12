@@ -1,0 +1,16 @@
+{
+  "name": "linkedin_scraper",
+  "version": "1.0.0",
+  "description": "A simple, efficient LinkedIn job scraper with data analysis tools.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "serverless-python-requirements": "^6.1.2"
+  }
+}
