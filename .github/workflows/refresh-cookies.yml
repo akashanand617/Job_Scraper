@@ -42,6 +42,7 @@ jobs:
         
     - name: Install Python dependencies
       run: |
+        cd linkedin_scraper
         pip install -r requirements.txt
         pip install boto3
         
@@ -58,6 +59,7 @@ jobs:
         LINKEDIN_PASSWORD: ${{ secrets.LINKEDIN_PASSWORD }}
         JOBS_BUCKET: linkedin-job-scraper-dev-jobs
       run: |
+        cd linkedin_scraper
         python3 refresh_cookies.py
         
     - name: Notify on success
