@@ -36,8 +36,8 @@ Add these secrets:
 |-------------|-------|-------------|
 | `LINKEDIN_EMAIL` | your-email@example.com | Your LinkedIn email |
 | `LINKEDIN_PASSWORD` | your-password | Your LinkedIn password |
-| `AWS_ACCESS_KEY_ID` | AKIA3ZRPF27PRTRU6I7V | Your AWS access key |
-| `AWS_SECRET_ACCESS_KEY` | fh/Lt0sjkEjMNnOZHNmEpvFvDhOGNWm33zQdk+x0 | Your AWS secret key |
+| `AWS_ACCESS_KEY_ID` | your-aws-access-key | Your AWS access key |
+| `AWS_SECRET_ACCESS_KEY` | your-aws-secret-key | Your AWS secret key |
 
 ### Step 4: Test the Workflow
 1. Go to your repository → Actions tab
