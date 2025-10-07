@@ -1,6 +1,6 @@
 {
   "/Users/akashanand/Job_Scraper/linkedin_scraper/serverless.yml": {
-    "versionFramework": "4.18.2",
+    "versionFramework": "4.20.2",
     "servicePath": "/Users/akashanand/Job_Scraper/linkedin_scraper/serverless.yml",
     "serviceConfigFileName": "serverless.yml",
     "service": {
@@ -286,9 +286,12 @@
     },
     "serviceRawFile": "service: linkedin-job-scraper\n\nplugins:\n  - serverless-python-requirements\n\ncustom:\n  pythonRequirements:\n    pythonBin: python3\n    dockerizePip: true\n    slim: true\n    strip: false\n\nprovider:\n  name: aws\n  runtime: python3.9\n  region: us-east-1\n  stage: dev\n  timeout: 600  # 10 minutes Lambda timeout (scheduled runs unaffected by API limits)\n  memorySize: 1024  # 1GB memory\n  deploymentBucket:\n    name: linkedin-job-scraper-deployment-bucket\n    serverSideEncryption: AES256\n  environment:\n    LINKEDIN_EMAIL: ${env:LINKEDIN_EMAIL}\n    LINKEDIN_PASSWORD: ${env:LINKEDIN_PASSWORD}\n    JOBS_BUCKET: ${self:service}-${self:provider.stage}-jobs\n  iam:\n    role:\n      statements:\n        - Effect: Allow\n          Action:\n            - s3:GetObject\n            - s3:PutObject\n            - s3:DeleteObject\n            - s3:CreateBucket\n            - s3:ListBucket\n            - s3:GetBucketLocation\n          Resource: \n            - \"arn:aws:s3:::${self:service}-${self:provider.stage}-jobs/*\"\n            - \"arn:aws:s3:::${self:service}-${self:provider.stage}-jobs\"\n        - Effect: Allow\n          Action:\n            - logs:CreateLogGroup\n            - logs:CreateLogStream\n            - logs:PutLogEvents\n          Resource: \"*\"\n        - Effect: Allow\n          Action:\n            - ssm:GetParameter\n            - ssm:PutParameter\n            - ssm:DeleteParameter\n          Resource: \"*\"\n        - Effect: Allow\n          Action:\n            - events:DescribeRule\n            - events:PutRule\n            - events:DeleteRule\n            - events:PutTargets\n            - events:RemoveTargets\n            - events:ListTargetsByRule\n          Resource: \"*\"\n\nfunctions:\n  api:\n    handler: lambda_handler.handler\n    timeout: 600  # Keep Lambda at 10 minutes; API integration will cap during testing\n    events:\n      - http:  # REST API (supports >30s once quota is approved)\n          path: /{proxy+}\n          method: ANY\n          cors: true\n          integration: lambda-proxy\n      - http:  # REST API root\n          path: /\n          method: ANY\n          cors: true\n          integration: lambda-proxy\n      # Main scraping every hour (all 7 batches) - accumulates data\n      - schedule:\n          rate: rate(1 hour)\n          input:\n            batch_number: 1\n            batch_size: 18\n      - schedule:\n          rate: rate(1 hour)\n          input:\n            batch_number: 2\n            batch_size: 18\n      - schedule:\n          rate: rate(1 hour)\n          input:\n            batch_number: 3\n            batch_size: 18\n      - schedule:\n          rate: rate(1 hour)\n          input:\n            batch_number: 4\n            batch_size: 18\n      - schedule:\n          rate: rate(1 hour)\n          input:\n            batch_number: 5\n            batch_size: 18\n      - schedule:\n          rate: rate(1 hour)\n          input:\n            batch_number: 6\n            batch_size: 18\n      - schedule:\n          rate: rate(1 hour)\n          input:\n            batch_number: 7\n            batch_size: 18\n\nresources:\n  Resources:\n    JobScraperBucket:\n      Type: AWS::S3::Bucket\n      Properties:\n        BucketName: ${self:service}-${self:provider.stage}-jobs\n        PublicAccessBlockConfiguration:\n          BlockPublicAcls: true\n          BlockPublicPolicy: true\n          IgnorePublicAcls: true\n          RestrictPublicBuckets: true",
     "command": [
-      "info"
+      "invoke"
     ],
-    "options": {},
+    "options": {
+      "function": "api",
+      "data": "{\"batch_number\": 1, \"batch_size\": 18}"
+    },
     "orgId": "9e2ccff8-73d7-457b-8d55-623954de0272",
     "orgName": "akashapi",
     "userId": "SV9xc8cjv9tpDFyTnh",
@@ -297,12 +300,12 @@
     "serviceProviderAwsCfStackName": "linkedin-job-scraper-dev",
     "serviceProviderAwsCfStackId": "arn:aws:cloudformation:us-east-1:810774026207:stack/linkedin-job-scraper-dev/3725c900-8eea-11f0-9a3d-0e5a5d8e6de1",
     "serviceProviderAwsCfStackCreated": "2025-09-11T08:35:04.852Z",
-    "serviceProviderAwsCfStackUpdated": "2025-09-12T01:26:18.670Z",
+    "serviceProviderAwsCfStackUpdated": "2025-10-03T22:15:32.002Z",
     "serviceProviderAwsCfStackStatus": "UPDATE_COMPLETE",
     "serviceProviderAwsCfStackOutputs": [
       {
         "OutputKey": "ApiLambdaFunctionQualifiedArn",
-        "OutputValue": "arn:aws:lambda:us-east-1:810774026207:function:linkedin-job-scraper-dev-api:21",
+        "OutputValue": "arn:aws:lambda:us-east-1:810774026207:function:linkedin-job-scraper-dev-api:23",
         "Description": "Current Lambda function version",
         "ExportName": "sls-linkedin-job-scraper-dev-ApiLambdaFunctionQualifiedArn"
       },

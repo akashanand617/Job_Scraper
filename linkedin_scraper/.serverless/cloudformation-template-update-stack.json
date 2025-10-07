@@ -136,7 +136,7 @@
       "Properties": {
         "Code": {
           "S3Bucket": "linkedin-job-scraper-deployment-bucket",
-          "S3Key": "serverless/linkedin-job-scraper/dev/1757640371485-2025-09-12T01:26:11.485Z/linkedin-job-scraper.zip"
+          "S3Key": "serverless/linkedin-job-scraper/dev/1759529723963-2025-10-03T22:15:23.963Z/linkedin-job-scraper.zip"
         },
         "Handler": "lambda_handler.handler",
         "Runtime": "python3.9",
@@ -161,14 +161,14 @@
         "ApiLogGroup"
       ]
     },
-    "ApiLambdaVersionertIX6I7HhsEn1WhkYL9JmwyNWMxrClK7MEm8KNUtw": {
+    "ApiLambdaVersionvHzEEqSQJlxBAUVc1gE2CvyqBbKRqhGInIHwsi4qNeY": {
       "Type": "AWS::Lambda::Version",
       "DeletionPolicy": "Retain",
       "Properties": {
         "FunctionName": {
           "Ref": "ApiLambdaFunction"
         },
-        "CodeSha256": "Qct/RGjGLGFqeHYqE9BmPvl9vCbYF4mIMH48apU3N+w="
+        "CodeSha256": "TK7BxOZ2sDKOketJZyVI8AAm/i2N17FS3rBmwDTeEWk="
       }
     },
     "ApiEventsRuleSchedule1": {
@@ -652,7 +652,7 @@
         "ApiLambdaPermissionApiGateway"
       ]
     },
-    "ApiGatewayDeployment1757640348063": {
+    "ApiGatewayDeployment1759529702203": {
       "Type": "AWS::ApiGateway::Deployment",
       "Properties": {
         "RestApiId": {
@@ -727,7 +727,7 @@
     "ApiLambdaFunctionQualifiedArn": {
       "Description": "Current Lambda function version",
       "Value": {
-        "Ref": "ApiLambdaVersionertIX6I7HhsEn1WhkYL9JmwyNWMxrClK7MEm8KNUtw"
+        "Ref": "ApiLambdaVersionvHzEEqSQJlxBAUVc1gE2CvyqBbKRqhGInIHwsi4qNeY"
       },
       "Export": {
         "Name": "sls-linkedin-job-scraper-dev-ApiLambdaFunctionQualifiedArn"

@@ -67,6 +67,58 @@ class FilterRequest(BaseModel):
 # Store active jobs
 active_jobs: Dict[str, Dict] = {}
 
+# ----------------------------------------------------------------------------
+# S3-backed aggregation helpers
+# ----------------------------------------------------------------------------
+def read_s3_hourly_batches_or_local_analytics() -> list:
+    """Read today's hourly batch files from S3; fall back to local analytics file.
+
+    Returns a list of job dicts with duplicates removed by job_id.
+    """
+    all_jobs = []
+    try:
+        import boto3
+        from datetime import datetime, timezone
+
+        s3_client = boto3.client('s3')
+        bucket_name = os.getenv('JOBS_BUCKET', 'linkedin-job-scraper-dev-jobs')
+        today = datetime.now(timezone.utc).date()
+        prefix = f"jobs/hourly/{today}/"
+
+        response = s3_client.list_objects_v2(Bucket=bucket_name, Prefix=prefix)
+        if 'Contents' in response:
+            for obj in response['Contents']:
+                if obj['Key'].endswith('.json'):
+                    file_obj = s3_client.get_object(Bucket=bucket_name, Key=obj['Key'])
+                    batch_jobs = json.loads(file_obj['Body'].read().decode('utf-8'))
+                    if isinstance(batch_jobs, list):
+                        all_jobs.extend(batch_jobs)
+                    else:
+                        all_jobs.append(batch_jobs)
+    except Exception as s3_error:
+        print(f"⚠️ S3 read failed: {s3_error}")
+        # Fallback to local analytics file
+        analytics_file = '/tmp/analytics_historical_jobs.json'
+        if os.path.exists(analytics_file):
+            try:
+                with open(analytics_file, 'r') as f:
+                    all_jobs = json.load(f)
+            except Exception as local_err:
+                print(f"⚠️ Local analytics read failed: {local_err}")
+
+    # Dedupe by job_id
+    if all_jobs:
+        seen_ids = set()
+        unique_jobs = []
+        for job in all_jobs:
+            job_id = job.get('job_id') or job.get('id')
+            if job_id and job_id not in seen_ids:
+                seen_ids.add(job_id)
+                unique_jobs.append(job)
+        all_jobs = unique_jobs
+
+    return all_jobs
+
 @app.get("/")
 @app.head("/")
 async def root():
@@ -332,17 +384,13 @@ async def run_analytics_task(job_id: str, keywords: str, max_shards: int, time_f
 async def list_analytics_jobs():
     """List all analytics LinkedIn jobs (accumulating)"""
     try:
-        if not os.path.exists('/tmp/analytics_historical_jobs.json'):
-            return {"total_jobs": 0, "jobs": [], "retention": "accumulating"}
-        
-        with open('/tmp/analytics_historical_jobs.json', 'r') as f:
-            all_jobs = json.load(f)
+        all_jobs = read_s3_hourly_batches_or_local_analytics()
         
         return {
             "total_jobs": len(all_jobs),
             "jobs": all_jobs,
             "retention": "accumulating",
-            "data_file": "analytics_historical_jobs.json"
+            "data_source": "s3_or_local"
         }
     except Exception as e:
         return {"error": f"Error reading analytics jobs: {str(e)}", "total_jobs": 0, "jobs": []}
@@ -461,13 +509,10 @@ async def get_latest_jobs():
 async def filter_jobs(request: FilterRequest):
     """Filter jobs by experience level, job type, workplace type from analytics data"""
     try:
-        # Read from analytics data file
-        analytics_file = '/tmp/analytics_historical_jobs.json'
-        if not os.path.exists(analytics_file):
+        # Read from S3 (hourly batches) or local analytics fallback
+        all_jobs = read_s3_hourly_batches_or_local_analytics()
+        if not all_jobs:
             return {"message": "No analytics data found", "total_jobs": 0, "filtered_jobs": []}
-        
-        with open(analytics_file, 'r') as f:
-            all_jobs = json.load(f)
         
         # Filter jobs based on request parameters
         filtered_jobs = []
@@ -504,6 +549,7 @@ async def filter_jobs(request: FilterRequest):
                 "workplace_type": request.workplace_type,
                 "limit": limit
             },
+            "data_source": "s3_or_local",
             "timestamp": datetime.now().isoformat()
         }
         
@@ -535,13 +581,10 @@ async def get_batch_info():
 async def get_available_filters():
     """Get available filter options and current job distribution from analytics data"""
     try:
-        # Read from analytics data file
-        analytics_file = '/tmp/analytics_historical_jobs.json'
-        if not os.path.exists(analytics_file):
+        # Read from S3 (hourly batches) or local analytics fallback
+        jobs = read_s3_hourly_batches_or_local_analytics()
+        if not jobs:
             return {"message": "No analytics data found", "filters": {}}
-        
-        with open(analytics_file, 'r') as f:
-            jobs = json.load(f)
         
         # Count jobs by each filter category
         exp_counts = {}
@@ -577,6 +620,7 @@ async def get_available_filters():
                     "counts": workplace_counts
                 }
             },
+            "data_source": "s3_or_local",
             "timestamp": datetime.now().isoformat()
         }
         

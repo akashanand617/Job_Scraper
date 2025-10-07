@@ -90,6 +90,7 @@ def login_and_save_cookies(email, password):
         # Click login button
         login_button = driver.find_element(By.CSS_SELECTOR, "button[type='submit']")
         login_button.click()
+        time.sleep(30)
         
         # Wait for successful login (with multiple possible success indicators)
         try:

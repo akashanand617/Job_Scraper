@@ -91,19 +91,29 @@ def load_cookies():
     """Load saved cookies from local file or S3"""
     try:
         with open('li_cookies.pkl', 'rb') as f:
-            return pickle.load(f)
-    except FileNotFoundError:
-        print("❌ No local cookies found. Checking S3...")
+            cookies = pickle.load(f)
+            if cookies:
+                print("✅ Loaded cookies from local file")
+                return cookies
+    except (FileNotFoundError, EOFError, pickle.UnpicklingError) as e:
+        print(f"❌ Local cookie file issue: {e}")
+    
+    print("❌ No local cookies found. Checking S3...")
+    
+    # Try to download cookies from S3
+    try:
+        import boto3
+        import os
         
-        # Try to download cookies from S3
-        try:
-            import boto3
-            import os
+        bucket_name = os.getenv('JOBS_BUCKET', 'linkedin-job-scraper-dev-jobs')
+        if bucket_name:
+            s3_client = boto3.client('s3')
+            s3_key = "cookies/li_cookies.pkl"
             
-            bucket_name = os.getenv('JOBS_BUCKET', 'linkedin-job-scraper-dev-jobs')
-            if bucket_name:
-                s3_client = boto3.client('s3')
-                s3_key = "cookies/li_cookies.pkl"
+            # Check if file exists in S3 first
+            try:
+                s3_client.head_object(Bucket=bucket_name, Key=s3_key)
+                print("✅ Found cookies in S3, downloading...")
                 
                 # Download cookies from S3
                 s3_client.download_file(bucket_name, s3_key, 'li_cookies.pkl')
@@ -111,12 +121,22 @@ def load_cookies():
                 
                 # Load the downloaded cookies
                 with open('li_cookies.pkl', 'rb') as f:
-                    return pickle.load(f)
-        except Exception as s3_error:
-            print(f"⚠️ S3 cookie download failed: {s3_error}")
-        
-        print("❌ No saved cookies found. Please run login.py first.")
-        return None
+                    cookies = pickle.load(f)
+                    if cookies:
+                        print("✅ Successfully loaded cookies from S3")
+                        return cookies
+                    else:
+                        print("❌ Downloaded cookies file is empty")
+            except s3_client.exceptions.NoSuchKey:
+                print("❌ No cookies found in S3")
+            except Exception as s3_head_error:
+                print(f"⚠️ S3 head check failed: {s3_head_error}")
+                
+    except Exception as s3_error:
+        print(f"⚠️ S3 cookie download failed: {s3_error}")
+    
+    print("❌ No saved cookies found. Please run login.py first.")
+    return None
 
 def setup_session():
     """Setup API session with cookies"""
@@ -193,6 +213,11 @@ def get_job_details_concurrent(session, job_ids, max_workers=CONCURRENT_WORKERS)
 
 def get_jobs_api(session, keywords, exp_level, job_type, workplace_type, count=100, time_filter='r604800'):
     """Get jobs from API for specific shard parameters with adaptive pagination"""
+    # Validate session first
+    if not session:
+        print("   ❌ No valid session available")
+        return []
+    
     all_jobs = []
     page = 0
     max_pages = MAX_PAGES_PER_SHARD  # Safety limit to prevent infinite loops
@@ -204,9 +229,14 @@ def get_jobs_api(session, keywords, exp_level, job_type, workplace_type, count=1
         try:
             response = session.get(url, timeout=API_TIMEOUT)
             if response.status_code != 200:
+                print(f"   ❌ HTTP {response.status_code} on page {page + 1}")
                 break
             
             data = response.json()
+            if not data:
+                print(f"   ❌ Empty response on page {page + 1}")
+                break
+                
             elements = data.get('data', {}).get('elements', [])
             
             if not elements:
@@ -428,7 +458,6 @@ def scrape_shard_api_only(session, keywords, exp_level, job_type, workplace_type
     wt_label = WT_LABEL.get(workplace_type, workplace_type)
     
     print(f"\n📋 Shard {shard_num}/{total_shards}: {exp_label} + {jt_label} + {wt_label}")
-    
     # Use API only
     print(f"   🔍 Fetching jobs via API...")
     api_jobs = get_jobs_api(session, keywords, exp_level, job_type, workplace_type, time_filter=time_filter)
@@ -488,6 +517,11 @@ def scrape_all_shards_api_only(keywords, max_shards=None, resume=False, time_fil
     
     # Setup API session only
     api_session = setup_session()
+    
+    # Validate session before proceeding
+    if not api_session:
+        print("❌ Failed to setup API session. Cannot proceed with scraping.")
+        return [], {}, {}
     
     # Initialize adaptive rate limiter
     rate_limiter = AdaptiveRateLimiter()
