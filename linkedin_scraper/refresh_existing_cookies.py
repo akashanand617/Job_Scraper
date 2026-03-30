@@ -4,24 +4,51 @@ Refresh existing LinkedIn cookies by visiting LinkedIn with current cookies
 This approach is less likely to trigger 2FA than a full login
 """
 
-import undetected_chromedriver as uc
 import pickle
 import time
 import os
+import re
+import subprocess
 import boto3
 import json
 from datetime import datetime, timezone
 from dotenv import load_dotenv
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 
 load_dotenv()
 
+
+def detect_chrome_version():
+    """Detect the installed Chrome/Chromium major version."""
+    candidates = [
+        "google-chrome --version",
+        "google-chrome-stable --version",
+        "chromium --version",
+        "chromium-browser --version",
+        '"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --version',
+    ]
+    for cmd in candidates:
+        try:
+            output = subprocess.check_output(cmd, shell=True, stderr=subprocess.DEVNULL).decode()
+            match = re.search(r"(\d+)\.", output)
+            if match:
+                version = int(match.group(1))
+                print(f"🔍 Detected Chrome/Chromium version: {version}")
+                return version
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            continue
+    print("⚠️ Could not detect Chrome version, letting undetected_chromedriver auto-detect")
+    return None
+
 def refresh_existing_cookies():
     """Refresh existing cookies by visiting LinkedIn"""
+    # Import browser deps here — only needed when actually running
+    import undetected_chromedriver as uc
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.support.ui import WebDriverWait
+    from selenium.webdriver.support import expected_conditions as EC
+
     print("🍪 Refreshing existing LinkedIn cookies...")
-    
+
     # Setup browser options
     options = uc.ChromeOptions()
     options.add_argument('--no-sandbox')
@@ -35,9 +62,17 @@ def refresh_existing_cookies():
     options.add_argument('--disable-web-security')
     options.add_argument('--disable-features=VizDisplayCompositor')
     
-    # Check if we're in Docker or GitHub Actions (use Chromium)
+    # Check if we're in Docker or GitHub Actions
     if os.path.exists('/.dockerenv') or os.getenv('GITHUB_ACTIONS'):
-        options.binary_location = '/usr/bin/chromium'
+        # Prefer google-chrome, fall back to chromium
+        if os.path.exists('/usr/bin/google-chrome-stable'):
+            options.binary_location = '/usr/bin/google-chrome-stable'
+        elif os.path.exists('/usr/bin/google-chrome'):
+            options.binary_location = '/usr/bin/google-chrome'
+        elif os.path.exists('/usr/bin/chromium-browser'):
+            options.binary_location = '/usr/bin/chromium-browser'
+        elif os.path.exists('/usr/bin/chromium'):
+            options.binary_location = '/usr/bin/chromium'
         options.add_argument('--headless')
         options.add_argument('--disable-gpu')
         options.add_argument('--no-sandbox')
@@ -57,8 +92,9 @@ def refresh_existing_cookies():
         options.add_argument('--no-first-run')
         options.add_argument('--disable-default-apps')
     
-    # Create driver
-    driver = uc.Chrome(options=options)
+    # Create driver with auto-detected Chrome version
+    chrome_version = detect_chrome_version()
+    driver = uc.Chrome(options=options, version_main=chrome_version)
     
     try:
         # First, try to load existing cookies from S3

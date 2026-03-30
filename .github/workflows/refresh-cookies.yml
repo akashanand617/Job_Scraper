@@ -2,41 +2,44 @@ name: Refresh LinkedIn Cookies
 
 on:
   schedule:
-    # Run every Sunday at 9 AM UTC (adjust timezone as needed)
+    # Run every Sunday at 9 AM UTC
     - cron: '0 9 * * 0'
   workflow_dispatch: # Allow manual trigger
 
 jobs:
   refresh-cookies:
     runs-on: ubuntu-latest
-    
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-      
+
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
-        python-version: '3.9'
-        
-    - name: Install system dependencies for Chromium
+        python-version: '3.12'
+
+    - name: Install Google Chrome
       run: |
+        # Install Chrome from Google's repo (not snap) for CI compatibility
+        wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg
+        echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
         sudo apt-get update
-        sudo apt-get install -y chromium chromium-driver
-        
+        sudo apt-get install -y google-chrome-stable
+        google-chrome-stable --version
+
     - name: Install Python dependencies
       run: |
         cd linkedin_scraper
-        pip install -r requirements.txt
-        pip install boto3
-        
+        pip install -r requirements-local.txt
+
     - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v4
       with:
         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         aws-region: us-east-1
-        
+
     - name: Refresh LinkedIn cookies
       env:
         LINKEDIN_EMAIL: ${{ secrets.LINKEDIN_EMAIL }}
@@ -49,13 +52,13 @@ jobs:
         cd linkedin_scraper
         # Try cookie refresh first (less likely to trigger 2FA)
         python3 refresh_existing_cookies.py || python3 refresh_cookies.py
-        
+
     - name: Notify on success
       if: success()
       run: |
         echo "✅ LinkedIn cookies refreshed successfully!"
         echo "Next refresh scheduled for next Sunday at 9 AM UTC."
-        
+
     - name: Notify on failure
       if: failure()
       run: |

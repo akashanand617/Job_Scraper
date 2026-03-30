@@ -3,22 +3,49 @@
 Simple LinkedIn login script.
 """
 
-import undetected_chromedriver as uc
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 import pickle
 import time
+import re
+import subprocess
 from getpass import getpass
 import os
 from dotenv import load_dotenv
 
 load_dotenv()
 
+
+def detect_chrome_version():
+    """Detect the installed Chrome/Chromium major version."""
+    candidates = [
+        "google-chrome --version",
+        "google-chrome-stable --version",
+        "chromium --version",
+        "chromium-browser --version",
+        '"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --version',
+    ]
+    for cmd in candidates:
+        try:
+            output = subprocess.check_output(cmd, shell=True, stderr=subprocess.DEVNULL).decode()
+            match = re.search(r"(\d+)\.", output)
+            if match:
+                version = int(match.group(1))
+                print(f"🔍 Detected Chrome/Chromium version: {version}")
+                return version
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            continue
+    print("⚠️ Could not detect Chrome version, letting undetected_chromedriver auto-detect")
+    return None
+
 def login_and_save_cookies(email, password):
     """Login to LinkedIn and save cookies"""
+    # Import browser deps here — these are not available in Lambda
+    import undetected_chromedriver as uc
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.support.ui import WebDriverWait
+    from selenium.webdriver.support import expected_conditions as EC
+
     print("🔐 Logging into LinkedIn...")
-    
+
     # Setup browser with optimized options (same as scraper)
     options = uc.ChromeOptions()
     options.add_argument('--no-sandbox')
@@ -32,9 +59,17 @@ def login_and_save_cookies(email, password):
     options.add_argument('--disable-web-security')
     options.add_argument('--disable-features=VizDisplayCompositor')
     
-    # Check if we're in Docker or GitHub Actions (use Chromium)
+    # Check if we're in Docker or GitHub Actions
     if os.path.exists('/.dockerenv') or os.getenv('GITHUB_ACTIONS'):
-        options.binary_location = '/usr/bin/chromium'
+        # Prefer google-chrome, fall back to chromium
+        if os.path.exists('/usr/bin/google-chrome-stable'):
+            options.binary_location = '/usr/bin/google-chrome-stable'
+        elif os.path.exists('/usr/bin/google-chrome'):
+            options.binary_location = '/usr/bin/google-chrome'
+        elif os.path.exists('/usr/bin/chromium-browser'):
+            options.binary_location = '/usr/bin/chromium-browser'
+        elif os.path.exists('/usr/bin/chromium'):
+            options.binary_location = '/usr/bin/chromium'
         options.add_argument('--headless')
         options.add_argument('--disable-gpu')
         options.add_argument('--no-sandbox')
@@ -49,11 +84,12 @@ def login_and_save_cookies(email, password):
         options.add_argument('--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
     
     # Create driver with retry logic
+    chrome_version = detect_chrome_version()
     max_retries = 3
     for attempt in range(max_retries):
         try:
             print(f"🔄 Attempt {attempt + 1}/{max_retries} to create browser...")
-            driver = uc.Chrome(options=options)
+            driver = uc.Chrome(options=options, version_main=chrome_version)
             break
         except Exception as e:
             print(f"⚠️ Browser creation attempt {attempt + 1} failed: {e}")

@@ -12,11 +12,11 @@ custom:
 
 provider:
   name: aws
-  runtime: python3.9
+  runtime: python3.12
   region: us-east-1
   stage: dev
   timeout: 600  # 10 minutes Lambda timeout (scheduled runs unaffected by API limits)
-  memorySize: 1024  # 1GB memory
+  memorySize: 1536  # 1.5GB memory (increased for AI/apply features)
   deploymentBucket:
     name: linkedin-job-scraper-deployment-bucket
     serverSideEncryption: AES256
@@ -24,6 +24,11 @@ provider:
     LINKEDIN_EMAIL: ${env:LINKEDIN_EMAIL}
     LINKEDIN_PASSWORD: ${env:LINKEDIN_PASSWORD}
     JOBS_BUCKET: ${self:service}-${self:provider.stage}-jobs
+    ANTHROPIC_API_KEY: ${env:ANTHROPIC_API_KEY, ''}
+    XAI_API_KEY: ${env:XAI_API_KEY, ''}
+    USERS_TABLE: ${self:service}-${self:provider.stage}-users
+    PROFILES_TABLE: ${self:service}-${self:provider.stage}-profiles
+    APPLICATIONS_TABLE: ${self:service}-${self:provider.stage}-applications
   iam:
     role:
       statements:
@@ -59,6 +64,24 @@ provider:
             - events:RemoveTargets
             - events:ListTargetsByRule
           Resource: "*"
+        - Effect: Allow
+          Action:
+            - dynamodb:GetItem
+            - dynamodb:PutItem
+            - dynamodb:DeleteItem
+            - dynamodb:Query
+            - dynamodb:Scan
+          Resource:
+            - "arn:aws:dynamodb:${self:provider.region}:*:table/${self:service}-${self:provider.stage}-*"
+
+package:
+  patterns:
+    - '!.serverless/**'
+    - '!.git/**'
+    - '!*.pkl'
+    - '!refresh_cookies.py'
+    - '!refresh_existing_cookies.py'
+    - '!node_modules/**'
 
 functions:
   api:
@@ -123,3 +146,40 @@ resources:
           BlockPublicPolicy: true
           IgnorePublicAcls: true
           RestrictPublicBuckets: true
+    UsersTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:service}-${self:provider.stage}-users
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: api_key
+            AttributeType: S
+        KeySchema:
+          - AttributeName: api_key
+            KeyType: HASH
+    ProfilesTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:service}-${self:provider.stage}-profiles
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: user_id
+            AttributeType: S
+        KeySchema:
+          - AttributeName: user_id
+            KeyType: HASH
+    ApplicationsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:service}-${self:provider.stage}-applications
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: user_id
+            AttributeType: S
+          - AttributeName: job_id
+            AttributeType: S
+        KeySchema:
+          - AttributeName: user_id
+            KeyType: HASH
+          - AttributeName: job_id
+            KeyType: RANGE

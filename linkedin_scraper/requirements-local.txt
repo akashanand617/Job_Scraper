@@ -1,0 +1,10 @@
+# All Lambda dependencies plus browser/ML packages for local and CI use
+-r requirements.txt
+
+# Browser automation (not available in Lambda)
+undetected-chromedriver>=3.5.0
+selenium>=4.15.0
+
+# Company Tier System — NLP scoring (too large for Lambda)
+sentence-transformers>=2.2.0
+numpy>=1.24.0

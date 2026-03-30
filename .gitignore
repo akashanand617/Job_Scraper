@@ -73,3 +73,7 @@ yarn-error.log*
 # Temporary files
 *.tmp
 *.temp
+
+# Company tracker caches and generated data
+company_tracker/.enrichment_cache/
+company_tracker/company_database.json

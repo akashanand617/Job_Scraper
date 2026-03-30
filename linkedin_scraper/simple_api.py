@@ -13,19 +13,36 @@ import os
 import subprocess
 import uuid
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 from pydantic import BaseModel
+from collections import defaultdict
 
 # Import your existing scraper
 import sys
 sys.path.append('src')
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
+from ats.router import ats_router
+from apply.router import apply_router
+
+# Company tier system
+try:
+    from company_tracker.company_ranker import (
+        rank_companies, quick_score, get_company_tier,
+        get_tier_summary, compute_composite_score,
+    )
+    from company_tracker.tier_config import TIER_LABELS, TIER_THRESHOLDS
+    COMPANY_TIERS_AVAILABLE = True
+except ImportError:
+    COMPANY_TIERS_AVAILABLE = False
+    TIER_LABELS = {}
+    TIER_THRESHOLDS = {}
 
 # Create FastAPI app
 app = FastAPI(
-    title="LinkedIn Job Scraper API",
-    description="Simple API for LinkedIn job scraping",
-    version="1.0.0"
+    title="AI Job Insights & Application Tool",
+    description="LinkedIn job scraping with ATS resume analysis",
+    version="2.0.0"
 )
 
 # Add CORS middleware
@@ -37,6 +54,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+# Mount routers
+app.include_router(ats_router)
+app.include_router(apply_router)
 
 # Default keywords for your resume automation
 DEFAULT_KEYWORDS = "AI OR Machine Learning OR Data Science OR Generative AI OR LLM OR Large Language Model OR Prompt Engineering OR Foundation Model OR Transformer OR RAG OR Reinforcement Learning With Human Feedback OR RLHF"
@@ -124,7 +145,7 @@ def read_s3_hourly_batches_or_local_analytics() -> list:
 async def root():
     """Root endpoint"""
     return {
-        "message": "LinkedIn Job Scraper API - Simplified",
+        "message": "AI Job Insights & Application Tool",
         "version": "2.0.0",
         "endpoints": {
             "scrape": "GET /scrape (manual trigger) or POST /scrape (programmatic)",
@@ -135,7 +156,26 @@ async def root():
             "filters": "GET /filters (available filter options)",
             "batch_info": "GET /batch-info",
             "health": "GET /health",
-            "test": "GET /test-scraper"
+            "test": "GET /test-scraper",
+            "ats_upload": "POST /ats/upload (upload resume PDF/DOCX)",
+            "ats_resumes": "GET /ats/resumes (list uploaded resumes)",
+            "ats_resume": "GET /ats/resumes/{resume_id} (get parsed resume)",
+            "ats_match": "POST /ats/match (score resume against jobs)",
+            "ats_analyze": "POST /ats/analyze (AI-powered deep analysis)",
+            "ats_gaps": "GET /ats/gaps/{resume_id}/{job_id} (keyword gap analysis)",
+            "company_tiers": "GET /companies/tiers (tier distribution of scraped jobs)",
+            "company_rank": "GET /companies/rank?name=CompanyName (get tier for a company)",
+            "company_top": "GET /companies/top?tier=T1_ELITE&limit=20 (top companies by tier)",
+            "apply_register": "POST /apply/auth/register (get API key)",
+            "apply_profile": "POST /apply/profile (create/update profile)",
+            "apply_resume": "POST /apply/profile/resume (upload resume)",
+            "apply_scored_jobs": "GET /apply/jobs/scored (jobs ranked by fit)",
+            "apply_cover_letter": "POST /apply/generate/cover-letter",
+            "apply_resume_tailor": "POST /apply/generate/resume-tailor",
+            "apply_answer": "POST /apply/generate/answer",
+            "apply_fit_summary": "POST /apply/generate/fit-summary",
+            "apply_applications": "GET /apply/applications (tracked applications)",
+            "apply_stats": "GET /apply/applications/stats",
         },
         "data_source": {
             "analytics": "analytics_historical_jobs.json (accumulating hourly)"
@@ -150,8 +190,44 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    """Health check"""
-    return {"status": "healthy", "timestamp": datetime.now().isoformat()}
+    """Health check with cookie status"""
+    cookie_status = "unknown"
+    cookie_age_hours = None
+
+    try:
+        import boto3
+        from datetime import timezone
+
+        s3_client = boto3.client('s3')
+        bucket_name = os.getenv('JOBS_BUCKET', 'linkedin-job-scraper-dev-jobs')
+
+        try:
+            metadata_obj = s3_client.get_object(
+                Bucket=bucket_name,
+                Key="cookies/li_cookies_metadata.json"
+            )
+            metadata = json.loads(metadata_obj['Body'].read().decode('utf-8'))
+            refreshed_at = datetime.fromisoformat(metadata.get('refreshed_at', ''))
+            age = datetime.now(timezone.utc) - refreshed_at
+            cookie_age_hours = round(age.total_seconds() / 3600, 1)
+
+            if cookie_age_hours > 168:  # > 7 days
+                cookie_status = "expired"
+            elif cookie_age_hours > 120:  # > 5 days
+                cookie_status = "stale"
+            else:
+                cookie_status = "fresh"
+        except Exception:
+            cookie_status = "missing"
+    except Exception:
+        cookie_status = "check_failed"
+
+    return {
+        "status": "healthy",
+        "cookie_status": cookie_status,
+        "cookie_age_hours": cookie_age_hours,
+        "timestamp": datetime.now().isoformat()
+    }
 
 @app.get("/test-scraper")
 async def test_scraper():
@@ -341,7 +417,16 @@ async def run_analytics_task(job_id: str, keywords: str, max_shards: int, time_f
         )
         
         print(f"✅ Analytics scraping completed: {len(all_jobs)} jobs found")
-        
+
+        # Check if scraping actually returned data
+        if not all_jobs and not shard_results:
+            error_msg = "No results — cookies likely expired. Refresh via GitHub Actions or locally."
+            print(f"❌ {error_msg}")
+            active_jobs[job_id]["status"] = "failed"
+            active_jobs[job_id]["message"] = error_msg
+            active_jobs[job_id]["completed_at"] = datetime.now().isoformat()
+            return  # Don't overwrite existing good data
+
         # Load existing analytics data
         existing_jobs = []
         if os.path.exists(jobs_file):
@@ -503,7 +588,15 @@ async def get_latest_jobs():
             "timestamp": datetime.now().isoformat()
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error reading analytics jobs: {str(e)}")
+        print(f"❌ Error in /latest endpoint: {e}")
+        return {
+            "total_jobs": 0,
+            "last_24h_jobs": 0,
+            "latest_jobs": [],
+            "error": str(e),
+            "data_source": "none",
+            "timestamp": datetime.now().isoformat()
+        }
 
 @app.post("/filter")
 async def filter_jobs(request: FilterRequest):
@@ -554,7 +647,14 @@ async def filter_jobs(request: FilterRequest):
         }
         
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error filtering jobs: {str(e)}")
+        print(f"❌ Error in /filter endpoint: {e}")
+        return {
+            "total_jobs": 0,
+            "filtered_jobs": 0,
+            "jobs": [],
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }
 
 @app.get("/batch-info")
 async def get_batch_info():
@@ -625,7 +725,175 @@ async def get_available_filters():
         }
         
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error getting filters: {str(e)}")
+        print(f"❌ Error in /filters endpoint: {e}")
+        return {
+            "total_jobs": 0,
+            "filters": {},
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }
+
+# ============================================================================
+# Company Tier Endpoints
+# ============================================================================
+
+@app.get("/companies/tiers")
+async def get_company_tier_distribution():
+    """Get the tier distribution of companies across all scraped jobs."""
+    if not COMPANY_TIERS_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Company tier system not available")
+
+    all_jobs = read_s3_hourly_batches_or_local_analytics()
+    if not all_jobs:
+        return {"message": "No analytics data found", "tiers": {}}
+
+    # Group jobs by company, then by tier
+    companies_seen = {}  # company_name -> tier
+    jobs_by_tier = defaultdict(list)
+
+    for job in all_jobs:
+        company = job.get("company_name", "N/A")
+        if company == "N/A":
+            continue
+        if company not in companies_seen:
+            tier = job.get("company_tier") or get_company_tier(company)
+            companies_seen[company] = tier
+        jobs_by_tier[companies_seen[company]].append(job.get("job_id"))
+
+    tier_summary = {}
+    tier_order = ["T1_ELITE", "T2_PREMIUM", "T3_STRONG", "T4_STANDARD", "T5_UNRANKED"]
+    tier_names = {
+        "T1_ELITE": "Elite", "T2_PREMIUM": "Premium", "T3_STRONG": "Strong",
+        "T4_STANDARD": "Standard", "T5_UNRANKED": "Unranked",
+    }
+
+    for tier in tier_order:
+        companies_in_tier = [c for c, t in companies_seen.items() if t == tier]
+        tier_summary[tier] = {
+            "label": tier_names.get(tier, tier),
+            "company_count": len(companies_in_tier),
+            "job_count": len(jobs_by_tier.get(tier, [])),
+            "top_companies": sorted(companies_in_tier)[:20],
+        }
+
+    return {
+        "total_companies": len(companies_seen),
+        "total_jobs": len(all_jobs),
+        "tiers": tier_summary,
+        "company_tiers_available": COMPANY_TIERS_AVAILABLE,
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
+@app.get("/companies/rank")
+async def rank_single_company(name: str):
+    """Get the tier and score breakdown for a specific company."""
+    if not COMPANY_TIERS_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Company tier system not available")
+
+    # Gather job data for this company from analytics
+    all_jobs = read_s3_hourly_batches_or_local_analytics()
+    company_jobs = [j for j in all_jobs if j.get("company_name", "").lower() == name.lower()]
+
+    score_data = quick_score(name, jobs=company_jobs)
+    score_data["jobs_found"] = len(company_jobs)
+
+    return score_data
+
+
+@app.get("/companies/top")
+async def get_top_companies(
+    tier: Optional[str] = None,
+    limit: int = 50,
+    sort_by: str = "job_count",
+):
+    """
+    Get top companies from scraped data, optionally filtered by tier.
+    sort_by: 'job_count' (default) or 'tier' (highest tier first).
+    """
+    if not COMPANY_TIERS_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Company tier system not available")
+
+    all_jobs = read_s3_hourly_batches_or_local_analytics()
+    if not all_jobs:
+        return {"message": "No analytics data found", "companies": []}
+
+    # Aggregate by company
+    company_data = defaultdict(lambda: {"jobs": [], "tier": "T5_UNRANKED"})
+    for job in all_jobs:
+        company = job.get("company_name", "N/A")
+        if company == "N/A":
+            continue
+        company_data[company]["jobs"].append(job)
+        # Use existing tier from job data, or compute
+        if company_data[company]["tier"] == "T5_UNRANKED":
+            company_data[company]["tier"] = job.get("company_tier") or get_company_tier(company)
+
+    # Build result list
+    results = []
+    tier_rank = {"T1_ELITE": 0, "T2_PREMIUM": 1, "T3_STRONG": 2, "T4_STANDARD": 3, "T5_UNRANKED": 4}
+    tier_names = {
+        "T1_ELITE": "Elite", "T2_PREMIUM": "Premium", "T3_STRONG": "Strong",
+        "T4_STANDARD": "Standard", "T5_UNRANKED": "Unranked",
+    }
+
+    for company, data in company_data.items():
+        entry = {
+            "company_name": company,
+            "tier": data["tier"],
+            "tier_label": tier_names.get(data["tier"], "Unknown"),
+            "job_count": len(data["jobs"]),
+            "sample_titles": list(set(j.get("title", "") for j in data["jobs"][:5])),
+        }
+        if tier and entry["tier"] != tier:
+            continue
+        results.append(entry)
+
+    # Sort
+    if sort_by == "tier":
+        results.sort(key=lambda x: (tier_rank.get(x["tier"], 99), -x["job_count"]))
+    else:
+        results.sort(key=lambda x: -x["job_count"])
+
+    return {
+        "total_companies": len(results),
+        "filter_tier": tier,
+        "companies": results[:limit],
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
+@app.post("/companies/rank-batch")
+async def rank_batch_companies(company_names: List[str]):
+    """Rank a batch of companies and return sorted results."""
+    if not COMPANY_TIERS_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Company tier system not available")
+
+    if len(company_names) > 100:
+        raise HTTPException(status_code=400, detail="Max 100 companies per batch")
+
+    all_jobs = read_s3_hourly_batches_or_local_analytics()
+    jobs_by_company = defaultdict(list)
+    for job in all_jobs:
+        company = job.get("company_name", "N/A")
+        if company != "N/A":
+            jobs_by_company[company.lower()].append(job)
+
+    results = []
+    for name in company_names:
+        company_jobs = jobs_by_company.get(name.lower(), [])
+        score = quick_score(name, jobs=company_jobs)
+        score["jobs_found"] = len(company_jobs)
+        results.append(score)
+
+    results.sort(key=lambda x: x.get("composite_score", 0), reverse=True)
+
+    return {
+        "ranked_companies": results,
+        "total": len(results),
+        "timestamp": datetime.now().isoformat(),
+    }
+
 
 # Helper functions to convert codes to labels
 def get_exp_label(code: str) -> str:

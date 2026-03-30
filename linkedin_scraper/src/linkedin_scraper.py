@@ -18,6 +18,24 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 import os
 
+# Use /tmp in Lambda (working dir /var/task is read-only)
+COOKIE_FILE = '/tmp/li_cookies.pkl' if os.getenv('AWS_LAMBDA_FUNCTION_NAME') else 'li_cookies.pkl'
+import sys
+
+# Add parent directory to path for company_tracker imports
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+
+# Company tier system — import with graceful fallback
+try:
+    from company_tracker.company_ranker import quick_score, get_company_tier
+    COMPANY_TIERS_AVAILABLE = True
+except ImportError:
+    COMPANY_TIERS_AVAILABLE = False
+    def quick_score(company_name, jobs=None):
+        return {"tier": "T5_UNRANKED", "tier_label": "Unranked", "composite_score": 0}
+    def get_company_tier(company_name):
+        return "T5_UNRANKED"
+
 # Search parameters
 EXP_CODES = ["1", "2", "3", "4", "5", "6"]  # Intern to Executive
 JT_CODES = ["I", "F", "C", "T", "P", "V", "O"]  # Internship to Other
@@ -90,37 +108,36 @@ class AdaptiveRateLimiter:
 def load_cookies():
     """Load saved cookies from local file or S3"""
     try:
-        with open('li_cookies.pkl', 'rb') as f:
+        with open(COOKIE_FILE, 'rb') as f:
             cookies = pickle.load(f)
             if cookies:
                 print("✅ Loaded cookies from local file")
                 return cookies
     except (FileNotFoundError, EOFError, pickle.UnpicklingError) as e:
         print(f"❌ Local cookie file issue: {e}")
-    
+
     print("❌ No local cookies found. Checking S3...")
-    
+
     # Try to download cookies from S3
     try:
         import boto3
-        import os
-        
+
         bucket_name = os.getenv('JOBS_BUCKET', 'linkedin-job-scraper-dev-jobs')
         if bucket_name:
             s3_client = boto3.client('s3')
             s3_key = "cookies/li_cookies.pkl"
-            
+
             # Check if file exists in S3 first
             try:
                 s3_client.head_object(Bucket=bucket_name, Key=s3_key)
                 print("✅ Found cookies in S3, downloading...")
-                
-                # Download cookies from S3
-                s3_client.download_file(bucket_name, s3_key, 'li_cookies.pkl')
+
+                # Download cookies from S3 (use /tmp in Lambda)
+                s3_client.download_file(bucket_name, s3_key, COOKIE_FILE)
                 print("✅ Cookies downloaded from S3")
-                
+
                 # Load the downloaded cookies
-                with open('li_cookies.pkl', 'rb') as f:
+                with open(COOKIE_FILE, 'rb') as f:
                     cookies = pickle.load(f)
                     if cookies:
                         print("✅ Successfully loaded cookies from S3")
@@ -131,10 +148,10 @@ def load_cookies():
                 print("❌ No cookies found in S3")
             except Exception as s3_head_error:
                 print(f"⚠️ S3 head check failed: {s3_head_error}")
-                
+
     except Exception as s3_error:
         print(f"⚠️ S3 cookie download failed: {s3_error}")
-    
+
     print("❌ No saved cookies found. Please run login.py first.")
     return None
 
@@ -145,11 +162,14 @@ def setup_session():
     # Try to load existing cookies first
     cookies = load_cookies()
     if not cookies:
+        # In Lambda there is no browser — cannot auto-login
+        if os.getenv('AWS_LAMBDA_FUNCTION_NAME'):
+            print("❌ No cookies available in Lambda. Refresh via GitHub Actions or locally and upload to S3.")
+            return None
         print("❌ No saved cookies found. Attempting to login...")
-        # Try to login automatically
+        # Try to login automatically (local/CI only)
         try:
             from login import login_and_save_cookies
-            import os
             email = os.getenv('LINKEDIN_EMAIL')
             password = os.getenv('LINKEDIN_PASSWORD')
             if email and password:
@@ -436,11 +456,14 @@ def get_job_details_api(session, job_id):
                 
                 # Timing
                 'created_at': created_at,
-                'created_at_formatted': created_at_formatted
+                'created_at_formatted': created_at_formatted,
+
+                # Company Tier (quick score — no web calls)
+                'company_tier': get_company_tier(company_name) if company_name != 'N/A' else 'T5_UNRANKED',
             }
     except:
         pass
-    
+
     return None
 
 
@@ -752,7 +775,22 @@ def main():
     print(f"\n🏆 Top Productive Shards:")
     for i, (shard_key, data) in enumerate(productive_shards[:3]):
         print(f"   {i+1}. {data['labels']}: {data['job_count']} jobs")
-    
+
+    # Show company tier distribution
+    tier_counts = defaultdict(int)
+    for job in all_jobs:
+        tier_counts[job.get('company_tier', 'T5_UNRANKED')] += 1
+    if tier_counts:
+        print(f"\n🏢 Company Tier Distribution:")
+        tier_order = ['T1_ELITE', 'T2_PREMIUM', 'T3_STRONG', 'T4_STANDARD', 'T5_UNRANKED']
+        tier_names = {'T1_ELITE': 'Elite', 'T2_PREMIUM': 'Premium', 'T3_STRONG': 'Strong',
+                      'T4_STANDARD': 'Standard', 'T5_UNRANKED': 'Unranked'}
+        for tier in tier_order:
+            count = tier_counts.get(tier, 0)
+            if count > 0:
+                pct = count / len(all_jobs) * 100
+                print(f"   {tier_names.get(tier, tier)}: {count} jobs ({pct:.1f}%)")
+
     print(f"\n💾 Saved to:")
     print(f"   - /tmp/linkedin_jobs_simplified.json (jobs with shard info)")
     if args.resume:
